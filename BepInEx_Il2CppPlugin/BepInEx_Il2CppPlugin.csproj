@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net6.0</TargetFramework>
+		<OutputType>Library</OutputType>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+		<!-- Don't copy referenced DLLs into the output folder. A BepInEx plugin
+		     ships as a single DLL; the game already has everything else. -->
+		<CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+	</PropertyGroup>
+
+	<!-- Version must match the BepInEx actually installed in the test game
+	     (LogOutput.log reports 6.0.0-be.752). -->
+	<ItemGroup>
+		<PackageReference Include="BepInEx.Unity.IL2CPP" Version="6.0.0-be.752" />
+	</ItemGroup>
+
+	<!-- The game is IL2CPP, so its C# API is exposed through "interop" assemblies
+	     that BepInEx generates next to the game. Referencing those directly
+	     guarantees we compile against exactly the API that exists at runtime.
+	     Private=false means "reference it, don't copy it into our output". -->
+	<PropertyGroup>
+		<InteropPath>D:\Games\SamabakeScrambleTest\BepInEx\SamabakeScramble\interop</InteropPath>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="$(InteropPath)\*.dll">
+			<Private>false</Private>
+		</Reference>
+	</ItemGroup>
+</Project>
