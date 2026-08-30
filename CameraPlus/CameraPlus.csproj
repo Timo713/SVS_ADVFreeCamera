@@ -2,6 +2,8 @@
 	<PropertyGroup>
 		<TargetFramework>net6.0</TargetFramework>
 		<OutputType>Library</OutputType>
+		<AssemblyName>SVS_ADVFreeCamera</AssemblyName>
+		<RootNamespace>SVS_ADVFreeCamera</RootNamespace>
 		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<!-- Don't copy referenced DLLs into the output folder. A BepInEx plugin
