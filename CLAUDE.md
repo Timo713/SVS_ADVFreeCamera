@@ -40,10 +40,14 @@ each significant step rather than doing everything at once.
    loaded and MCP Server > Start clicked. Gives signatures, fields, enums, type
    hierarchy. Method bodies are EMPTY STUBS — no logic. Don't expect readable
    implementations of game methods.
-4. dnSpy on compiled plugin DLLs — unlike game code, other people's plugin DLLs
+4. dnSpy.Console.exe (D:\Code\_tools\dnSpy) - the same decompiler without
+   the GUI or the MCP server. `dnSpy.Console.exe --no-color -t Some.Type
+   Assembly-CSharp.dll` prints a whole type to stdout. Best way to get a
+   complete field list; game method bodies are still stubs.
+5. dnSpy on compiled plugin DLLs — unlike game code, other people's plugin DLLs
    are real .NET and decompile fully. Load with `load_assembly`, then pass the
    assembly name to `search_types` to scope searches to it.
-5. Ghidra + Il2CppDumper for actual method logic — expensive, and complicated by
+6. Ghidra + Il2CppDumper for actual method logic — expensive, and complicated by
    SVS's encrypted metadata. Last resort only. Decrypted metadata for SVS does
    exist (y0soro/BepInEx-Builds, metadata-index/index.json) and would give real
    method bodies, but using it means a different BepInEx build — do not put it in

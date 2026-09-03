@@ -24,7 +24,7 @@ namespace SVS_ADVFreeCamera
 
 		public const string PROCESS_NAME = "SamabakeScramble";
 		public const string GUID = "SVS_ADVFreeCamera";
-		public const string VERSION = "1.0.0";
+		public const string VERSION = "1.0.5";
 
 		#endregion
 
@@ -71,12 +71,16 @@ namespace SVS_ADVFreeCamera
 		public static ConfigEntry<CameraType> freeCameraType = null!;
 		public static ConfigEntry<InitialCamera> initialState = null!;
 		public static ConfigEntry<bool> silenceRepeatedVoice = null!;
+		public static ConfigEntry<bool> invertX = null!;
+		public static ConfigEntry<bool> invertY = null!;
 		public static ConfigEntry<float> rotateSpeed = null!;
 		public static ConfigEntry<float> zoomSpeed = null!;
 		public static ConfigEntry<float> moveSpeed = null!;
 		public static ConfigEntry<WheelFunction> wheelFunction = null!;
 		public static ConfigEntry<MiddleButtonFunction> middleButtonFunction = null!;
-		public static ConfigEntry<bool> blockClickAdvance = null!;
+		public static ConfigEntry<ClickAdvance> clickAdvance = null!;
+		public static ConfigEntry<float> tapSeconds = null!;
+		public static ConfigEntry<float> tapPixels = null!;
 
 		//Framing
 		public static ConfigEntry<FocusMode> focusMode = null!;
@@ -91,6 +95,7 @@ namespace SVS_ADVFreeCamera
 		//Debug
 		public static ConfigEntry<bool> showOverlay = null!;
 		public static ConfigEntry<bool> showReadout = null!;
+		public static ConfigEntry<bool> showTextArea = null!;
 		public static ConfigEntry<float> overlaySeconds = null!;
 		public static ConfigEntry<bool> logEnabled = null!;
 		public static ConfigEntry<LogLevel> logLevel = null!;
@@ -105,93 +110,96 @@ namespace SVS_ADVFreeCamera
 
 			//General
 			enabled = Config.Bind(CATEGORY_GENERAL, "Enabled", true,
-				new ConfigDescription("Master switch for every feature of this plugin.", null, Order(100)));
+				new ConfigDescription("Turn the whole plugin on or off.", null, Order(100)));
 			toggleKey = Config.Bind(CATEGORY_GENERAL, "Toggle Free Camera", KeyCode.F,
-				new ConfigDescription("Switches the free camera on and off during a conversation.", null, Order(90)));
+				new ConfigDescription("Key that turns the free camera on and off during a conversation.",
+					null, Order(90)));
 
 
 			//Camera
 			freeCameraType = Config.Bind(CATEGORY_CAMERA, "Camera Type", CameraType.CameraType1,
-				new ConfigDescription(
-					"CameraType1 is safe: the dialogue keeps working, so lines can be advanced while looking "
-					+ "around. Panning moves along a frame fixed when the camera came on rather than following "
-					+ "the view. CameraType2 pans correctly, following the view, but the dialogue UI stops "
-					+ "responding until you switch back, because the scenario driver has to be switched off.",
+				new ConfigDescription("CameraType1 keeps the dialogue working, but panning does not follow the "
+				+ "view. CameraType2 pans properly and hides the dialogue until you switch back.",
 					null, Order(100)));
 			initialState = Config.Bind(CATEGORY_CAMERA, "Initial Camera", InitialCamera.DefaultCamera,
-				new ConfigDescription("How each conversation starts. DefaultCamera leaves the game exactly as it "
-				+ "would be without this plugin until the toggle key is pressed. CameraType1 brings the free "
-				+ "camera up as soon as a character is actually in shot.", null, Order(90)));
-			blockClickAdvance = Config.Bind(CATEGORY_CAMERA, "Left Click Does Not Advance", false,
-				new ConfigDescription("While the free camera is on, stop left click advancing the dialogue, so the "
-				+ "camera can be dragged freely. Choices are still selectable. Advance with the mouse wheel or "
-				+ "keyboard instead.", null, Order(75)));
+				new ConfigDescription("Which camera a conversation starts on.", null, Order(90)));
+			clickAdvance = Config.Bind(CATEGORY_CAMERA, "Left Click Advance", ClickAdvance.Normal,
+				new ConfigDescription("How left click advances the dialogue while the free camera is on. Normal "
+				+ "leaves it alone, Never stops it, TextAreaOnly advances only from the message frame, TapOnly "
+				+ "advances on a quick tap. Choices stay clickable. CameraType1 only.", null, Order(75)));
+			tapSeconds = Config.Bind(CATEGORY_CAMERA, "Tap Length", 0.2f,
+				new ConfigDescription("How long left click can be held and still count as a tap. TapOnly only.",
+					new AcceptableValueRange<float>(0.05f, 1f), Order(74)));
+			tapPixels = Config.Bind(CATEGORY_CAMERA, "Tap Drag Allowance", 10f,
+				new ConfigDescription("How far the mouse can move during a tap. TapOnly only.",
+					new AcceptableValueRange<float>(0f, 100f), Order(73)));
 			silenceRepeatedVoice = Config.Bind(CATEGORY_CAMERA, "Silence Repeated Voice", true,
-				new ConfigDescription("Extra safety net for the voice line that restarts when switching camera "
-					+ "types. Normally unnecessary, since the line number is restored instead.", null, Order(70)));
+				new ConfigDescription("Mute the voice line that repeats when switching camera type.",
+					null, Order(70)));
+			invertX = Config.Bind(CATEGORY_CAMERA, "Invert X", false,
+				new ConfigDescription("Reverse horizontal mouse look. Panning reverses only when both Invert "
+				+ "boxes are on.", null, Order(66)));
+			invertY = Config.Bind(CATEGORY_CAMERA, "Invert Y", false,
+				new ConfigDescription("Reverse vertical mouse look. Panning reverses only when both Invert "
+				+ "boxes are on.", null, Order(65)));
 			rotateSpeed = Config.Bind(CATEGORY_CAMERA, "Rotate Speed", 2f,
-				new ConfigDescription("Character creation uses 2.", new AcceptableValueRange<float>(0.1f, 10f), Order(60)));
+				new ConfigDescription("How fast the camera turns. Character creation uses 2.",
+					new AcceptableValueRange<float>(0.1f, 10f), Order(60)));
 			zoomSpeed = Config.Bind(CATEGORY_CAMERA, "Zoom Speed", 2f,
-				new ConfigDescription("Mouse wheel zoom. The right-drag dolly is governed by Move Speed.",
+				new ConfigDescription("How fast the mouse wheel zooms.",
 					new AcceptableValueRange<float>(0.1f, 10f), Order(50)));
 			moveSpeed = Config.Bind(CATEGORY_CAMERA, "Move Speed", 0.05f,
-				new ConfigDescription("Panning and right-drag dolly speed. Character creation uses 0.05.",
+				new ConfigDescription("How fast the camera pans. Character creation uses 0.05.",
 					new AcceptableValueRange<float>(0.01f, 1f), Order(40)));
-
 			wheelFunction = Config.Bind(CATEGORY_CAMERA, "Mouse Wheel Function", WheelFunction.Zoom,
-				new ConfigDescription("What the wheel does while the free camera is on. Rotating with the wheel "
-				+ "avoids holding a mouse button, which also advances the dialogue.", null, Order(35)));
+				new ConfigDescription("What the mouse wheel does while the free camera is on.", null, Order(35)));
 			middleButtonFunction = Config.Bind(CATEGORY_CAMERA, "Middle Button Function", MiddleButtonFunction.Pan,
-				new ConfigDescription("What holding the middle button does. Rotate lets the camera be turned "
-				+ "without left click, which is the only button that advances the dialogue.", null, Order(34)));
+				new ConfigDescription("What holding the middle mouse button does.", null, Order(34)));
+
 
 			//Framing
 			focusMode = Config.Bind(CATEGORY_FRAMING, "Focus Point", FocusMode.KeepCameraPosition,
-				new ConfigDescription(
-					"KeepCameraPosition leaves the view exactly as the scene framed it, so switching to the free "
-					+ "camera changes nothing until you move. Character centres on whoever is being talked to. "
-					+ "RememberLastPosition resumes wherever you left the camera.", null, Order(100)));
+				new ConfigDescription("What the camera aims at. KeepCameraPosition leaves the shot as the game "
+				+ "framed it, Character centres on whoever is talking, RememberLastPosition resumes where you "
+				+ "left the camera.", null, Order(100)));
 			focusBone = Config.Bind(CATEGORY_FRAMING, "Character Focus Bone", FocusBone.Neck,
-				new ConfigDescription("ONLY APPLIES WHEN FOCUS POINT IS SET TO CHARACTER. Which bone the camera centres on, "
-				+ "from Head down to Hips. Tracks the character as they move, so it needs no assumption about "
-				+ "how tall they are.",
-				null, Order(95)));
+				new ConfigDescription("Which part of the character to centre on. Only used when Focus Point is "
+				+ "Character.", null, Order(95)));
 			cameraDistance = Config.Bind(CATEGORY_FRAMING, "Camera Distance", 1.04f,
-				new ConfigDescription("How far the camera sits from the point it orbits. Lower is closer in. 1.04 matches the "
-					+ "framing the game uses, and applies to the default camera as well.",
+				new ConfigDescription("How far the camera sits from what it looks at. 1.04 matches the game.",
 					new AcceptableValueRange<float>(0.05f, 3f), Order(90)));
 			focusHeightOffset = Config.Bind(CATEGORY_FRAMING, "Height Offset", 0f,
-				new ConfigDescription("Raise or lower the point the camera aims at, in metres. Useful range is about -1.2 to 0.8; "
-					+ "the slider goes wider so larger values can still be typed. Applies to the default camera too.", new AcceptableValueRange<float>(-1.5f, 1.5f), Order(80)));
+				new ConfigDescription("Raise or lower the point the camera aims at, in metres.",
+					new AcceptableValueRange<float>(-1.5f, 1.5f), Order(80)));
 			focusDepthOffset = Config.Bind(CATEGORY_FRAMING, "Depth Offset", 0f,
-				new ConfigDescription("Push the aim point past the character (positive) or nearer (negative), in metres. Useful "
-					+ "range is about -2.0 to 0.8; the slider goes wider so larger values can still be typed. "
-					+ "Applies to the default camera too.", new AcceptableValueRange<float>(-1.5f, 1.5f), Order(70)));
+				new ConfigDescription("Move the aim point further away (positive) or nearer (negative), in metres.",
+					new AcceptableValueRange<float>(-1.5f, 1.5f), Order(70)));
 			angleOffset = Config.Bind(CATEGORY_FRAMING, "Tilt Offset", 0f,
 				new ConfigDescription("Tilt the camera down (positive) or up (negative), in degrees.",
-				new AcceptableValueRange<float>(-120f, 60f), Order(68)));
+					new AcceptableValueRange<float>(-120f, 60f), Order(68)));
 			offsetsAffectDefault = Config.Bind(CATEGORY_FRAMING, "Offsets Affect Default Camera", false,
-				new ConfigDescription("The offsets always apply to every free camera. Turn this on to have them "
-				+ "affect the default camera as well.", null, Order(66)));
+				new ConfigDescription("Apply the offsets to the normal conversation camera as well.",
+					null, Order(66)));
 			showCrosshair = Config.Bind(CATEGORY_FRAMING, "Show Crosshair", false,
-				new ConfigDescription("Mark the point the camera orbits while you are moving it, as character creation does.",
-					null, Order(60)));
+				new ConfigDescription("Mark the point the camera orbits while you move it.", null, Order(60)));
+
 
 			//Debug
 			showOverlay = Config.Bind(CATEGORY_DEBUG, "Show Status Overlay", false,
-				new ConfigDescription("Draw plugin status and recent messages on screen.", null, Order(100)));
+				new ConfigDescription("Show plugin status and messages on screen.", null, Order(100)));
 			showReadout = Config.Bind(CATEGORY_DEBUG, "Show Camera Readout", false,
-				new ConfigDescription("Show live camera position, angles, field of view and orbit radius. "
-					+ "Needs Show Status Overlay.", null, Order(90)));
+				new ConfigDescription("Show camera and click details. Needs Show Status Overlay.", null, Order(90)));
+			showTextArea = Config.Bind(CATEGORY_DEBUG, "Show Text Area", false,
+				new ConfigDescription("Outline the message frame on screen.", null, Order(85)));
 			overlaySeconds = Config.Bind(CATEGORY_DEBUG, "Overlay Message Seconds", 6f,
-				new ConfigDescription("How long each on-screen message stays before fading out.",
+				new ConfigDescription("How long each message stays on screen.",
 					new AcceptableValueRange<float>(1f, 30f), Order(80)));
 			logEnabled = Config.Bind(CATEGORY_DEBUG, "Enable Logging", true,
-				new ConfigDescription("Write plugin messages to LogOutput.log. Turn on when reporting a "
-					+ "problem.", null, Order(70)));
+				new ConfigDescription("Write plugin messages to LogOutput.log.", null, Order(70)));
 			logLevel = Config.Bind(CATEGORY_DEBUG, "Log Levels",
 				LogLevel.Info | LogLevel.Message | LogLevel.Warning | LogLevel.Error | LogLevel.Fatal,
-				new ConfigDescription("Which message kinds to keep.", null, Order(60)));
+				new ConfigDescription("Which messages to write.", null, Order(60)));
+
 
 			//Create the component that watches for conversations. It lives on the
 			//BepInEx manager object, so it survives every scene change.

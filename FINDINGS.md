@@ -92,12 +92,82 @@ Only clearing `MainScenario.enabled` stops it. Specifically ruled out:
   completely unaffected, while unchecking the same component by hand breaks it
   instantly. Do not reach for prefix-skip here.
 
+Overwriting the orbit centre every frame instead was tried and does not work:
+the centre gets pinned, so the camera can only rotate about one fixed point.
+Worse, that failed approach silently became Camera Type 2 when Camera Type 3
+was removed - the working branch was left unreachable behind a type check that
+nothing satisfied any more. If panning is wrong, check `EngageFix` reaches the
+`_mainScenario.enabled = false` line at all.
+
 Camera Type 2 therefore disables the driver, which costs the dialogue UI until it
 is switched back. Toggling the driver replays the current line — voice, lip sync,
 subtitle and animation together — so `_currentLine` is saved and restored around
 it, and the driver is switched back on the next frame to clear the leftover
 subtitle. Restoring the UI needs the `ADVScene(Clone)` GameObject cycled off and
 on.
+
+---
+
+### Blocking click-advance
+
+`TextScenario.Regulate` is the gate. `MainScenario.IsInputLock` is not, and can
+be held true every single frame while clicking still advances - do not go back
+to it. `Regulate.Control` is a bit-flag set of what is currently **blocked**,
+over `ADV.Regulate/Controls`:
+
+| `Next` | `ClickNext` | `Skip` | `Auto` | `AutoForce` | `Log` |
+|---|---|---|---|---|---|
+| 1 | **2** | 4 | 8 | 16 | 32 |
+
+Measured from the RUE console during a conversation:
+
+```csharp
+var scenario = UnityEngine.Object.FindObjectOfType<ADV.ADVScene>().Scenario;
+scenario.Regulate.Control                                        // 0 in normal dialogue
+scenario.Regulate.AddRegulate(ADV.Regulate.Controls.ClickNext);  // click and wheel stop advancing
+scenario.Regulate.SubRegulate(ADV.Regulate.Controls.ClickNext);  // both work again
+```
+
+Reading 0 is what settles the direction: the set lists restrictions, so Add
+blocks and Sub restores. The flag **holds** - `Control` still read `ClickNext`
+seconds later - so `UpdateRegulate` does not recompute it away and there is no
+per-frame fight. Blocking `ClickNext` also stops the mouse wheel advancing, and
+choice buttons stay clickable, so choices need no special case.
+
+The plugin writes the flag every frame regardless, which is free and survives
+the scenario object being swapped between lines, and it only ever lifts the
+flag from the exact `TextScenario` it set it on - a scenario already blocking
+clicks by itself is left alone.
+
+Advancing by hand, for modes that block the click and then decide: `TextScenario`
+has `RequestNextLine()` and `MessageWindowProc(NextInfo)`, the second being the
+game own click handler - `new TextScenario.NextInfo()` then
+`Set(isCompleteDisplayText, isNext, isSkip)`. Lift the flag around the call and
+put it back in the same frame, so it makes no difference whether that path
+checks `ClickNext` itself.
+
+**Only advance when the message frame is on screen.** With no frame showing,
+asking for the next line ends the conversation, so a tap anywhere - including
+one meant for a pause or config button - closes it. `TextScenario._messageWindow`
+is the frame RectTransform and `_msgWindowCanvas` the canvas that draws it; an
+overlay canvas is already in screen pixels, anything else needs projecting
+through `canvas.worldCamera`. The same rect is what makes TextAreaOnly exact at
+any resolution, with no height to calibrate.
+
+The frame is **not deactivated** when it goes away at the end of a conversation:
+`activeInHierarchy` stays true and the rect keeps its size, so an active check
+alone passes and a tap still ends the conversation. What actually changes is that
+the window leaves the screen, so the test that works is whether its rect still
+overlaps `0,0,Screen.width,Screen.height`. Canvas enabled and CanvasGroup alpha
+are checked too, being the other ways UI hides without being deactivated.
+
+Careful with the bool properties on `TextScenario`: only `IsChoice`, `IsSkip`,
+`IsAuto`, `IsInputLock` and friends belong to it. `IsNext`, `IsCompleteDisplayText`
+and `IsVisible` show up in a dump of the type but belong to nested classes, and
+do not compile against the scenario itself.
+
+Full write-up, including the corroborating `ADV.Commands.Base.Regulate` scenario
+command, is in D:\CoderdPov\FINDINGS.md §4.
 
 ---
 
@@ -189,6 +259,24 @@ the camera during a pause. It does **not** give readable C# on its own;
 Il2CppDumper output has empty bodies too. Do it offline against a *copy* of
 `GameAssembly.dll`, never by swapping the BepInEx build.
 
+dnSpy has a command line build, `D:\Code\_tools\dnSpy\dnSpy.Console.exe`, which
+needs neither the GUI nor the MCP server:
+
+```bash
+D:/Code/_tools/dnSpy/dnSpy.Console.exe --no-color -t ILLGames.Unity.CameraController Assembly-CSharp.dll
+```
+
+`-t` takes `Namespace.Name` or a bare `Name`, and prints the whole type to
+stdout - every field, property and signature. Method bodies are still stubs
+for game code, but for "what fields does this type have" it is faster and more
+complete than the MCP, and it works when dnSpy is closed. That is how the
+camera field list below was settled.
+
+`ILLGames.Unity.CameraController` has exactly four speed fields: `_xRotSpeed`,
+`_yRotSpeed`, `_zoomSpeed` and `_moveSpeed`, and **no invert or reverse field
+of any kind**. Rotation therefore inverts per axis by sign, while panning and
+the right-drag dolly share `_moveSpeed` and cannot be inverted separately.
+
 Other camera plugins (`SVS_3rdPov`, `SVS_PovX`) overwrite `Camera.main` every
 frame and will silently defeat this one. Rename or remove them while testing.
 
@@ -201,8 +289,6 @@ frame and will silently defeat this one. Rename or remove them while testing.
   `Time.timeScale == 0` did not help.
 - **Panning with the dialogue intact.** Only Camera Type 2 pans correctly, and it
   costs the UI. Overwriting the orbit centre every frame was tried and failed.
-- **Left click still advances the dialogue** even with `IsInputLock` held
-  continuously, so that flag is evidently not what gates it.
 
 ---
 

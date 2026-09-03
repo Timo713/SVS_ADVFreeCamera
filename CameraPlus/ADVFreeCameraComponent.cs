@@ -74,6 +74,25 @@ namespace SVS_ADVFreeCamera
 
 
 	/// <summary>
+	/// What left click does while the free camera is on.
+	/// </summary>
+	public enum ClickAdvance
+	{
+		/// <summary>The game as it ships - dragging the camera advances too.</summary>
+		Normal,
+
+		/// <summary>Click and wheel never advance while the camera is up.</summary>
+		Never,
+
+		/// <summary>Advance only while the pointer is over the message frame.</summary>
+		TextAreaOnly,
+
+		/// <summary>A quick tap advances; press and hold moves the camera.</summary>
+		TapOnly,
+	}
+
+
+	/// <summary>
 	/// Which bone to centre on when Focus Point is Character.
 	/// </summary>
 	public enum FocusBone
@@ -158,12 +177,16 @@ namespace SVS_ADVFreeCamera
 		//Whether the panning fix is currently engaged, and the orbit centre we own
 		//while OverrideCentre is doing the panning
 		private bool _fixEngaged;
-		private Vector3 _desiredCentre;
 
 		//The mode in force right now, which the toggle key can flip without
 		//rewriting the configured default
 		private CameraType _currentMode = CameraType.CameraType1;
-		private bool _lockedInput;
+		private ADV.TextScenario? _clickBlocked;
+
+		//Left click tap detection, for ClickAdvance.TapOnly
+		private bool _tapTracking;
+		private float _tapDownTime;
+		private Vector3 _tapDownPos;
 
 		//Where the camera was left last time, for RememberLastPosition. Static so
 		//it survives the component being rebuilt between conversations.
@@ -507,11 +530,7 @@ namespace SVS_ADVFreeCamera
 				_camera = null;
 			}
 
-			if (_lockedInput && _mainScenario != null)
-			{
-				_lockedInput = false;
-				_mainScenario.IsInputLock = false;
-			}
+			ReleaseClickBlock();
 
 			_fixEngaged = false;
 			RestoreScenario();
@@ -605,10 +624,10 @@ namespace SVS_ADVFreeCamera
 			controller._targetTexTrans = _pivot!.transform;
 			controller.isConfigTargetTex = true;
 
-			controller._xRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value;
-			controller._yRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value;
+			controller._xRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value * SignX();
+			controller._yRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value * SignY();
 			controller._zoomSpeed = ADVFreeCameraPlugin.zoomSpeed.Value;
-			controller._moveSpeed = ADVFreeCameraPlugin.moveSpeed.Value;
+			controller._moveSpeed = ADVFreeCameraPlugin.moveSpeed.Value * MoveSign();
 			controller._noneTargetDir = 5f;
 
 			//Pausing sets the time scale to zero. Without this the controller stops
@@ -667,16 +686,6 @@ namespace SVS_ADVFreeCamera
 			if (fix == CameraType.CameraType1) return;
 
 			_fixEngaged = true;
-
-			if (fix == CameraType.CameraType2)
-			{
-				//Take ownership of the orbit centre. From here LateUpdate writes it
-				//every frame, so whatever the scenario sets is overwritten before
-				//it can be seen - the dialogue keeps running untouched.
-				_desiredCentre = _controller != null ? _controller.CameraPos : _pivot!.transform.position;
-				Logging.LogInfo("Panning fix: overriding the orbit centre");
-				return;
-			}
 
 			if (_mainScenario == null)
 			{
@@ -1104,7 +1113,11 @@ namespace SVS_ADVFreeCamera
 			//Also applied here, not only in LateUpdate: the scenario handles the
 			//click in its own Update, so setting the flag afterwards was always a
 			//frame late.
-			ApplyInputLock();
+			ApplyClickBlock();
+
+			//Only here, never in LateUpdate: GetMouseButtonUp is true in both, so
+			//a tap would otherwise be counted twice and skip a line
+			TrackTapAdvance();
 
 			if (Input.GetKeyDown(ADVFreeCameraPlugin.toggleKey.Value))
 			{
@@ -1123,6 +1136,35 @@ namespace SVS_ADVFreeCamera
 		}
 
 		/// <summary>
+		/// Direction of horizontal mouse input. Rotation carries a separate speed
+		/// per axis, so inverting it is only a sign on that speed.
+		/// </summary>
+		private static float SignX()
+		{
+			return ADVFreeCameraPlugin.invertX.Value ? -1f : 1f;
+		}
+
+		/// <summary>
+		/// Direction of vertical mouse input.
+		/// </summary>
+		private static float SignY()
+		{
+			return ADVFreeCameraPlugin.invertY.Value ? -1f : 1f;
+		}
+
+		/// <summary>
+		/// Panning and the right-drag dolly share the single _moveSpeed value, so
+		/// they cannot be inverted one axis at a time. Reversing them only when both
+		/// axes are inverted keeps the two settings honest.
+		/// </summary>
+		private static float MoveSign()
+		{
+			bool both = ADVFreeCameraPlugin.invertX.Value && ADVFreeCameraPlugin.invertY.Value;
+			return both ? -1f : 1f;
+		}
+
+
+		/// <summary>
 		/// Push settings that can be changed mid-conversation straight through, so
 		/// dragging a slider in the config window shows immediately rather than
 		/// only after the window closes and the camera is rebuilt.
@@ -1131,13 +1173,10 @@ namespace SVS_ADVFreeCamera
 		{
 			if (IsActive == false || _controller == null) return;
 
-			_controller._xRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value;
-			_controller._yRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value;
+			_controller._xRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value * SignX();
+			_controller._yRotSpeed = ADVFreeCameraPlugin.rotateSpeed.Value * SignY();
 			_controller._zoomSpeed = ADVFreeCameraPlugin.zoomSpeed.Value;
-			if (_fixEngaged == false || _currentMode != CameraType.CameraType2)
-			{
-				_controller._moveSpeed = ADVFreeCameraPlugin.moveSpeed.Value;
-			}
+			_controller._moveSpeed = ADVFreeCameraPlugin.moveSpeed.Value * MoveSign();
 
 			//Framing is only re-applied when a value actually changes, otherwise it
 			//would fight the player every frame
@@ -1222,85 +1261,230 @@ namespace SVS_ADVFreeCamera
 		}
 
 		/// <summary>
-		/// OverrideCentre panning: move the orbit centre ourselves and write it
-		/// back every frame, so the scenario resetting it has no visible effect.
-		/// This runs after the scenario has had its turn.
+		/// Runs after the scenario has had its turn, so anything written here is
+		/// the last word on the camera for the frame.
 		/// </summary>
 		private void LateUpdate()
 		{
 			ApplyLiveConfig();
-			ApplyInputLock();
+			ApplyClickBlock();
 			RemapWheel();
 			RemapMiddleButton();
 			OffsetDefaultCamera();
+		}
 
-			if (IsActive == false || _fixEngaged == false || _camera == null) return;
-			if (_currentMode != CameraType.CameraType2) return;
 
-			//Middle drag, or left and right held together, matching the game
-			bool panning = Input.GetMouseButton(2) || (Input.GetMouseButton(0) && Input.GetMouseButton(1));
+		/// <summary>
+		/// Decide whether left click may advance the dialogue this frame, and hold
+		/// the games own gate to match.
+		///
+		/// That gate is TextScenario.Regulate, a bit-flag set of what is currently
+		/// blocked, and ClickNext is the flag for advancing by click. Confirmed in
+		/// game: Control reads 0 during normal dialogue, AddRegulate(ClickNext) stops
+		/// clicking and scrolling from advancing, SubRegulate(ClickNext) puts both
+		/// back, and choice buttons stay clickable throughout.
+		///
+		/// MainScenario.IsInputLock was tried first and is simply the wrong flag - it
+		/// can be held true every single frame and clicking still advances.
+		/// </summary>
+		private void ApplyClickBlock()
+		{
+			ADV.TextScenario? scenario = Scenario();
+			bool wanted = IsActive && scenario != null && BlockClickNow(scenario!);
 
-			//Suppress the built-in panning only while the gesture is held. Zeroing
-			//move speed outright also kills the dolly, which is what broke zooming
-			//when this was tried before.
-			if (_controller != null)
+			//A new line can bring a new scenario object, so let go of the old one first
+			if (_clickBlocked != null && (wanted == false || _clickBlocked != scenario))
 			{
-				_controller._moveSpeed = panning ? 0f : ADVFreeCameraPlugin.moveSpeed.Value;
+				ReleaseClickBlock();
 			}
 
-			if (panning)
-			{
-				float dx = Input.GetAxis("Mouse X");
-				float dy = Input.GetAxis("Mouse Y");
+			if (wanted == false) return;
 
-				if (dx != 0f || dy != 0f)
-				{
-					Transform view = _camera.transform;
-					float scale = ADVFreeCameraPlugin.moveSpeed.Value * Mathf.Max(1f, _orbitDistance);
-					_desiredCentre += ((view.right * dx) - (view.up * dy)) * scale;
-				}
+			if (_clickBlocked == null)
+			{
+				//If the scenario is already blocking clicks by itself, leave it alone.
+				//Lifting the flag later would be undoing a restriction we did not impose
+				if ((scenario!.Regulate.Control & ADV.Regulate.Controls.ClickNext) != 0) return;
+				_clickBlocked = scenario;
 			}
 
-			if (_controller != null)
-			{
-				_controller.CameraPos = _desiredCentre;
-			}
-
-			if (_pivot != null) _pivot.transform.position = _desiredCentre;
+			//Written every frame in case the scenario recomputes its own restrictions
+			scenario!.Regulate.AddRegulate(ADV.Regulate.Controls.ClickNext);
 		}
 
 		/// <summary>
-		/// Hold the scenario input locked while the free camera is on, so left
-		/// click no longer advances the dialogue and the camera can be dragged
-		/// freely. The lock is released while a choice is on screen, or the options
-		/// could never be picked.
-		///
-		/// Earlier attempts set this only during a drag and lost the race against
-		/// the scenario; held continuously it does not have to win any race.
+		/// The running scenario, or null when there is nothing to advance.
 		/// </summary>
-		private void ApplyInputLock()
+		private ADV.TextScenario? Scenario()
 		{
-			if (_mainScenario == null) return;
+			ADV.TextScenario? scenario = _advScene != null ? _advScene.Scenario : null;
+			if (scenario != null && scenario.Regulate == null) scenario = null;
+			return scenario;
+		}
 
-			bool wanted = IsActive
-				&& ADVFreeCameraPlugin.blockClickAdvance.Value
-				&& _mainScenario.IsChoice == false;
-
-			if (wanted)
+		/// <summary>
+		/// Whether click-advance is blocked right now. Decided every frame from where
+		/// the pointer is, not at the moment of the click: the scenario handles the
+		/// click inside its own Update and there is no guarantee we run first, so the
+		/// flag has to be correct before the button ever goes down.
+		/// </summary>
+		private bool BlockClickNow(ADV.TextScenario scenario)
+		{
+			switch (ADVFreeCameraPlugin.clickAdvance.Value)
 			{
-				//Written every frame: the scenario clears it again on its own
-				_mainScenario.IsInputLock = true;
-				_lockedInput = true;
+				case ClickAdvance.Never:
+					return true;
+
+				case ClickAdvance.TextAreaOnly:
+					return PointerOverMessageWindow(scenario) == false;
+
+				//Always blocked here. A tap is recognised on release and advanced by hand
+				case ClickAdvance.TapOnly:
+					return true;
+
+				default:
+					return false;
+			}
+		}
+
+		/// <summary>
+		/// A quick tap advances the line, a press and hold moves the camera. Click is
+		/// blocked the whole time in this mode, so the advance is made by hand once the
+		/// button comes back up soon enough, and close enough to where it went down.
+		/// </summary>
+		private void TrackTapAdvance()
+		{
+			if (IsActive == false) return;
+			if (ADVFreeCameraPlugin.clickAdvance.Value != ClickAdvance.TapOnly) return;
+
+			if (Input.GetMouseButtonDown(0))
+			{
+				_tapTracking = true;
+				_tapDownTime = Time.unscaledTime;
+				_tapDownPos = Input.mousePosition;
 				return;
 			}
 
-			//Only ever written back once, so the game keeps control of its own flag
-			if (_lockedInput)
-			{
-				_lockedInput = false;
-				_mainScenario.IsInputLock = false;
-			}
+			if (Input.GetMouseButtonUp(0) == false || _tapTracking == false) return;
+			_tapTracking = false;
+
+			if (Time.unscaledTime - _tapDownTime > ADVFreeCameraPlugin.tapSeconds.Value) return;
+			if (Vector3.Distance(Input.mousePosition, _tapDownPos) > ADVFreeCameraPlugin.tapPixels.Value) return;
+
+			AdvanceOneLine();
 		}
+
+		/// <summary>
+		/// Advance the dialogue the way a click would have. The block is lifted around
+		/// the call and put straight back, so it makes no difference whether this path
+		/// checks ClickNext - and it all happens inside one frame, so nothing else ever
+		/// sees the flag clear.
+		/// </summary>
+		private void AdvanceOneLine()
+		{
+			ADV.TextScenario? scenario = Scenario();
+			if (scenario == null) return;
+
+			//A choice on screen is picked by clicking the option itself, which the
+			//block never touched - advancing here as well would eat the next line
+			if (scenario.IsChoice) return;
+
+			//With no frame on screen there is no line to advance, and asking for one
+			//ends the conversation. That state covers the pause and config screens as
+			//well, where a tap is meant for a button rather than the dialogue.
+			Rect frame;
+			if (MessageWindowRect(scenario, out frame) == false) return;
+
+			bool restore = _clickBlocked != null;
+			if (restore) scenario.Regulate.SubRegulate(ADV.Regulate.Controls.ClickNext);
+
+			//MessageWindowProc is the games own click handler, so a half-typed line
+			//finishes instead of being skipped. RequestNextLine is the blunt fallback
+			//for when it reports the click was not handled
+			ADV.TextScenario.NextInfo info = new ADV.TextScenario.NextInfo();
+			info.Set(false, true, false);
+
+			bool handled = scenario.MessageWindowProc(info);
+			if (handled == false) scenario.RequestNextLine();
+
+			ADVFreeCameraPlugin.Logging.LogDebug($"Tap advance, MessageWindowProc={handled}");
+
+			if (restore) scenario.Regulate.AddRegulate(ADV.Regulate.Controls.ClickNext);
+		}
+
+		/// <summary>
+		/// Whether the pointer is over the message frame.
+		/// </summary>
+		private static bool PointerOverMessageWindow(ADV.TextScenario scenario)
+		{
+			Rect area;
+			if (MessageWindowRect(scenario, out area) == false) return false;
+
+			Vector3 mouse = Input.mousePosition;
+			return area.Contains(new Vector2(mouse.x, mouse.y));
+		}
+
+		/// <summary>
+		/// The message frame in screen pixels, y measured from the bottom. Read from
+		/// the windows own RectTransform rather than a guessed height, so it follows
+		/// the resolution and the UI scale with no calibration.
+		/// </summary>
+		private static bool MessageWindowRect(ADV.TextScenario scenario, out Rect area)
+		{
+			area = new Rect();
+
+			RectTransform? window = scenario._messageWindow;
+			if (window == null || window.gameObject.activeInHierarchy == false) return false;
+
+			//The frame is not deactivated when it goes away, so being active is not
+			//enough on its own - it can be switched off at the canvas, faded out, or
+			//simply parked outside the screen
+			Canvas? canvas = scenario._msgWindowCanvas;
+			if (canvas != null && canvas.enabled == false) return false;
+
+			CanvasGroup? group = window!.GetComponentInParent<CanvasGroup>();
+			if (group != null && group.alpha < 0.05f) return false;
+
+			Il2CppStructArray<Vector3> corners = new Il2CppStructArray<Vector3>(4);
+			window!.GetWorldCorners(corners);
+
+			//An overlay canvas is already in screen pixels; anything else has to be
+			//projected through the camera that draws it
+			Camera? uiCamera = null;
+			if (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) uiCamera = canvas.worldCamera;
+
+			Vector3 bottomLeft = corners[0];
+			Vector3 topRight = corners[2];
+
+			if (uiCamera != null)
+			{
+				bottomLeft = uiCamera!.WorldToScreenPoint(bottomLeft);
+				topRight = uiCamera!.WorldToScreenPoint(topRight);
+			}
+
+			area = Rect.MinMaxRect(bottomLeft.x, bottomLeft.y, topRight.x, topRight.y);
+
+			//Overlaps is false for an empty rect as well, so this covers a frame that
+			//has been collapsed to nothing as well as one moved out of sight
+			return area.Overlaps(new Rect(0f, 0f, Screen.width, Screen.height));
+		}
+
+
+		/// <summary>
+		/// Hand click-advance back, and only to the exact scenario it was taken from.
+		/// </summary>
+		private void ReleaseClickBlock()
+		{
+			if (_clickBlocked == null) return;
+
+			if (_clickBlocked.Regulate != null)
+			{
+				_clickBlocked.Regulate.SubRegulate(ADV.Regulate.Controls.ClickNext);
+			}
+
+			_clickBlocked = null;
+		}
+
 
 		/// <summary>
 		/// Re-purpose the mouse wheel. Rotating with the wheel avoids holding a
@@ -1329,8 +1513,8 @@ namespace SVS_ADVFreeCamera
 			Vector3 angles = _controller.CameraRot;
 			float amount = scroll * ADVFreeCameraPlugin.zoomSpeed.Value * 40f;
 
-			if (wheel == WheelFunction.RotateHorizontal) angles.y += amount;
-			else angles.x += amount;
+			if (wheel == WheelFunction.RotateHorizontal) angles.y += amount * SignX();
+			else angles.x += amount * SignY();
 
 			_controller.CameraRot = angles;
 		}
@@ -1350,8 +1534,8 @@ namespace SVS_ADVFreeCamera
 			//the right-drag dolly is untouched the rest of the time
 			_controller._moveSpeed = 0f;
 
-			float dx = Input.GetAxis("Mouse X") * ADVFreeCameraPlugin.rotateSpeed.Value;
-			float dy = Input.GetAxis("Mouse Y") * ADVFreeCameraPlugin.rotateSpeed.Value;
+			float dx = Input.GetAxis("Mouse X") * ADVFreeCameraPlugin.rotateSpeed.Value * SignX();
+			float dy = Input.GetAxis("Mouse Y") * ADVFreeCameraPlugin.rotateSpeed.Value * SignY();
 			if (dx == 0f && dy == 0f) return;
 
 			Vector3 angles = _controller.CameraRot;
@@ -1444,6 +1628,8 @@ namespace SVS_ADVFreeCamera
 			bool live = _inConversation && Time.timeScale > 0f;
 			if (IsActive && live && moving && ADVFreeCameraPlugin.showCrosshair.Value) DrawCrosshair();
 
+			if (_inConversation && ADVFreeCameraPlugin.showTextArea.Value) DrawTextArea();
+
 			if (ADVFreeCameraPlugin.showOverlay.Value == false) return;
 
 			float y = 10f;
@@ -1454,6 +1640,24 @@ namespace SVS_ADVFreeCamera
 				Draw(y, $"ADVFreeCamera: {state}   [{ADVFreeCameraPlugin.toggleKey.Value} to toggle]",
 					IsActive ? Color.green : Color.white);
 				y += 22f;
+			}
+
+			//Shown even with the camera off: the block only applies while it is on,
+			//which is the first thing to check when a mode looks like it does nothing
+			if (_inConversation && ADVFreeCameraPlugin.showReadout.Value)
+			{
+				ADV.TextScenario? scenario = Scenario();
+				string gate = scenario != null ? scenario.Regulate.Control.ToString() : "no scenario";
+				string held = _clickBlocked != null ? "ours" : "not ours";
+
+				Rect frame;
+				bool onScreen = scenario != null && MessageWindowRect(scenario!, out frame);
+
+				Draw(y, $"click {ADVFreeCameraPlugin.clickAdvance.Value}   camera {(IsActive ? "ON" : "off")}   block {held}   Regulate {gate}", Color.yellow);
+				y += 20f;
+				string state = scenario == null ? "no scenario" : (onScreen ? "on screen" : "hidden");
+				Draw(y, $"frame {state}", Color.yellow);
+				y += 20f;
 			}
 
 			if (IsActive && _camera != null && ADVFreeCameraPlugin.showReadout.Value)
@@ -1506,6 +1710,7 @@ namespace SVS_ADVFreeCamera
 		/// the concave four-point star that texture uses.
 		/// </summary>
 		private static Texture2D? _crosshair;
+		private static Texture2D? _solid;
 
 		private static Texture2D Crosshair()
 		{
@@ -1539,6 +1744,46 @@ namespace SVS_ADVFreeCamera
 			_crosshair = texture;
 			return texture;
 		}
+
+		/// <summary>
+		/// Outline the message frame, so the area that still advances the dialogue
+		/// under TextAreaOnly can be seen rather than guessed at.
+		/// </summary>
+		private void DrawTextArea()
+		{
+			ADV.TextScenario? scenario = Scenario();
+			if (scenario == null) return;
+
+			Rect area;
+			if (MessageWindowRect(scenario!, out area) == false) return;
+
+			//GUI measures y from the top of the screen, everything else from the bottom
+			float top = Screen.height - area.yMax;
+			const float thickness = 2f;
+
+			GUI.color = new Color(0f, 1f, 0.4f, 0.9f);
+			GUI.DrawTexture(new Rect(area.xMin, top, area.width, thickness), Solid());
+			GUI.DrawTexture(new Rect(area.xMin, top + area.height - thickness, area.width, thickness), Solid());
+			GUI.DrawTexture(new Rect(area.xMin, top, thickness, area.height), Solid());
+			GUI.DrawTexture(new Rect(area.xMax - thickness, top, thickness, area.height), Solid());
+			GUI.color = Color.white;
+		}
+
+		/// <summary>
+		/// One white pixel, stretched to draw the outline with.
+		/// </summary>
+		private static Texture2D Solid()
+		{
+			if (_solid != null) return _solid;
+
+			Texture2D texture = new Texture2D(1, 1, TextureFormat.ARGB32, false);
+			texture.hideFlags = HideFlags.HideAndDontSave;
+			texture.SetPixel(0, 0, Color.white);
+			texture.Apply();
+			_solid = texture;
+			return texture;
+		}
+
 
 		private static void DrawCrosshair()
 		{
