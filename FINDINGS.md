@@ -161,6 +161,25 @@ the window leaves the screen, so the test that works is whether its rect still
 overlaps `0,0,Screen.width,Screen.height`. Canvas enabled and CanvasGroup alpha
 are checked too, being the other ways UI hides without being deactivated.
 
+A click is **two stages**, and both belong to `ADV.TextController`, reached as
+`scenario.TextController`:
+
+- `IsCompleteDisplayText` - whether the line has finished arriving letter by
+  letter. This is the real state; the identically named field on
+  `TextScenario.NextInfo` is only what a caller claims.
+- `ForceCompleteDisplayText()` - finish the line now, which is what the first
+  click does.
+
+Only once the line is complete does a click advance, through
+`MessageWindowProc(NextInfo)` with `Set(true, true, false)`. Getting this wrong is
+expensive and the symptoms mislead: asking for the next line while the text is
+still arriving does not advance and does not fail either - **the scenario queues
+the request** until the typewriter finishes. Clicks appear to be swallowed, then
+several lines advance by themselves, and everything feels one to two seconds
+behind. `RequestNextLine()` on its own advances, but skips whatever the click
+handler does about the line that just ended: the previous voice line starts over
+whenever the new line has no voice of its own.
+
 Careful with the bool properties on `TextScenario`: only `IsChoice`, `IsSkip`,
 `IsAuto`, `IsInputLock` and friends belong to it. `IsNext`, `IsCompleteDisplayText`
 and `IsVisible` show up in a dump of the type but belong to nested classes, and
@@ -284,11 +303,36 @@ frame and will silently defeat this one. Rename or remove them while testing.
 
 ## 6. Still open
 
-- **Pause** returns the camera to its default framing. The readout confirms it is
-  our camera being moved, not a different one rendering; holding the pose against
-  `Time.timeScale == 0` did not help.
+- **Pause** returns the camera to its default framing. Everything below is
+  measured, and none of it has produced a fix:
+
+  - `Time.timeScale` really is `0.00` while paused, so pause detection is not the
+    problem.
+  - It is our camera being moved. Its transform changes, and both the controller
+    and the camera stay enabled throughout.
+  - **Camera Type 2 is immune.** That is the mode which switches `MainScenario`
+    off, so the scenario is what triggers it.
+  - Writing the pose back does not hold it, in any form tried: the camera
+    transform, the controller state (`CameraPos`, `CameraRot`, `CameraDir`,
+    `CameraFov`), both together, from `LateUpdate`, and from a Harmony postfix on
+    `CameraController.LateUpdate` so it lands after the controller whichever way
+    Unity ordered the two. All of that was removed again rather than left in.
+
+  `TextScenario.Update` is the only Unity message on the scenario side and
+  `CameraController.LateUpdate` the only one on the camera side, so on ordering
+  alone a postfix on the latter should have been the last word before rendering.
+  It was not, which says something writes the camera during the render phase or
+  from a UniRx subscription later than both. Finding it means reading real method
+  bodies - see the Ghidra route in section 5 - not another experiment.
+
 - **Panning with the dialogue intact.** Only Camera Type 2 pans correctly, and it
   costs the UI. Overwriting the orbit centre every frame was tried and failed.
+
+  Untried, and the most promising direction: drive `Main Camera` rather than the
+  ADV camera, the way character creation and H scenes do. Both of those pan
+  correctly with the same `CameraController`, so comparing their setup in
+  RuntimeUnityEditor against ours is the place to start - what the target
+  transform is, what the camera stack looks like, and what else is attached.
 
 ---
 

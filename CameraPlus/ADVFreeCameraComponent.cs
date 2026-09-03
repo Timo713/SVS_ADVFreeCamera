@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using HarmonyLib;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using ILLGames.Unity;
@@ -183,7 +182,10 @@ namespace SVS_ADVFreeCamera
 		private CameraType _currentMode = CameraType.CameraType1;
 		private ADV.TextScenario? _clickBlocked;
 
+
+
 		//Left click tap detection, for ClickAdvance.TapOnly
+		private string _lastTap = "none";
 		private bool _tapTracking;
 		private float _tapDownTime;
 		private Vector3 _tapDownPos;
@@ -1368,10 +1370,22 @@ namespace SVS_ADVFreeCamera
 			if (Input.GetMouseButtonUp(0) == false || _tapTracking == false) return;
 			_tapTracking = false;
 
-			if (Time.unscaledTime - _tapDownTime > ADVFreeCameraPlugin.tapSeconds.Value) return;
-			if (Vector3.Distance(Input.mousePosition, _tapDownPos) > ADVFreeCameraPlugin.tapPixels.Value) return;
+			float held = Time.unscaledTime - _tapDownTime;
+			float moved = Vector3.Distance(Input.mousePosition, _tapDownPos);
 
-			AdvanceOneLine();
+			if (held > ADVFreeCameraPlugin.tapSeconds.Value)
+			{
+				_lastTap = $"{held:F2}s held too long";
+				return;
+			}
+
+			if (moved > ADVFreeCameraPlugin.tapPixels.Value)
+			{
+				_lastTap = $"{held:F2}s dragged {moved:F0}px";
+				return;
+			}
+
+			_lastTap = $"{held:F2}s {(AdvanceOneLine() ? "advanced" : "nothing to advance")}";
 		}
 
 		/// <summary>
@@ -1380,36 +1394,48 @@ namespace SVS_ADVFreeCamera
 		/// checks ClickNext - and it all happens inside one frame, so nothing else ever
 		/// sees the flag clear.
 		/// </summary>
-		private void AdvanceOneLine()
+		private bool AdvanceOneLine()
 		{
 			ADV.TextScenario? scenario = Scenario();
-			if (scenario == null) return;
+			if (scenario == null) return false;
 
 			//A choice on screen is picked by clicking the option itself, which the
 			//block never touched - advancing here as well would eat the next line
-			if (scenario.IsChoice) return;
+			if (scenario.IsChoice) return false;
 
 			//With no frame on screen there is no line to advance, and asking for one
-			//ends the conversation. That state covers the pause and config screens as
-			//well, where a tap is meant for a button rather than the dialogue.
+			//ends the conversation instead
 			Rect frame;
-			if (MessageWindowRect(scenario, out frame) == false) return;
+			if (MessageWindowRect(scenario, out frame) == false) return false;
+
+			//Paused, the frame is still up but the tap was meant for a menu button
+			if (Time.timeScale <= 0f) return false;
+
+			//A line arrives one letter at a time, and the first click finishes it off
+			//rather than moving on. Claiming the text was already complete made the
+			//scenario hold the request until the typewriter had finished by itself,
+			//which is what queued up clicks and advanced several lines at once.
+			ADV.TextController? text = scenario.TextController;
+
+			if (text != null && text.IsCompleteDisplayText == false)
+			{
+				text.ForceCompleteDisplayText();
+				return true;
+			}
 
 			bool restore = _clickBlocked != null;
 			if (restore) scenario.Regulate.SubRegulate(ADV.Regulate.Controls.ClickNext);
 
-			//MessageWindowProc is the games own click handler, so a half-typed line
-			//finishes instead of being skipped. RequestNextLine is the blunt fallback
-			//for when it reports the click was not handled
+			//MessageWindowProc is the games own click handler and does the bookkeeping
+			//around a line ending, which RequestNextLine on its own does not - calling
+			//that directly leaves the last voice line to start over. NextInfo is what a
+			//click reports: display finished, next asked for, skip not held.
 			ADV.TextScenario.NextInfo info = new ADV.TextScenario.NextInfo();
-			info.Set(false, true, false);
-
-			bool handled = scenario.MessageWindowProc(info);
-			if (handled == false) scenario.RequestNextLine();
-
-			ADVFreeCameraPlugin.Logging.LogDebug($"Tap advance, MessageWindowProc={handled}");
+			info.Set(true, true, false);
+			scenario.MessageWindowProc(info);
 
 			if (restore) scenario.Regulate.AddRegulate(ADV.Regulate.Controls.ClickNext);
+			return true;
 		}
 
 		/// <summary>
@@ -1656,6 +1682,8 @@ namespace SVS_ADVFreeCamera
 				Draw(y, $"click {ADVFreeCameraPlugin.clickAdvance.Value}   camera {(IsActive ? "ON" : "off")}   block {held}   Regulate {gate}", Color.yellow);
 				y += 20f;
 				string state = scenario == null ? "no scenario" : (onScreen ? "on screen" : "hidden");
+				if (ADVFreeCameraPlugin.clickAdvance.Value == ClickAdvance.TapOnly) state += $"   tap {_lastTap}";
+
 				Draw(y, $"frame {state}", Color.yellow);
 				y += 20f;
 			}
@@ -1830,13 +1858,6 @@ namespace SVS_ADVFreeCamera
 				//Call Destroy() on the component, not the GameObject
 				Destroy(this);
 			}
-		}
-
-
-
-		/*HOOKS*/
-		public static class Hooks
-		{
 		}
 	}
 }
