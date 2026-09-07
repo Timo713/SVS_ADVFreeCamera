@@ -94,8 +94,10 @@ far.
 
 ## Building
 
-You need the .NET SDK. The project compiles against the interop assemblies
-BepInEx generates next to your game, so point it at your install:
+You need the .NET SDK. The project compiles against the interop assemblies that
+sit next to your game under `BepInEx\SamabakeScramble\interop` — an SVS-HF_Patch
+install already has them, and BepInEx generates them on first run otherwise. Point
+the build at yours:
 
 ```bash
 cp Local.props.example Local.props
