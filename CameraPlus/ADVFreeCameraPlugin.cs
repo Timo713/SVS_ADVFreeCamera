@@ -123,11 +123,11 @@ namespace SVS_ADVFreeCamera
 					null, Order(100)));
 			initialState = Config.Bind(CATEGORY_CAMERA, "Initial Camera", InitialCamera.DefaultCamera,
 				new ConfigDescription("Which camera a conversation starts on.", null, Order(90)));
-			clickAdvance = Config.Bind(CATEGORY_CAMERA, "Left Click Advance", ClickAdvance.Normal,
+			clickAdvance = Config.Bind(CATEGORY_CAMERA, "Left Click Advance", ClickAdvance.TapOnly,
 				new ConfigDescription("How left click advances the dialogue while the free camera is on. Normal "
 				+ "leaves it alone, Never stops it, TextAreaOnly advances only from the message frame, TapOnly "
 				+ "advances on a quick tap. Choices stay clickable. CameraType1 only.", null, Order(75)));
-			tapSeconds = Config.Bind(CATEGORY_CAMERA, "Tap Length", 0.4f,
+			tapSeconds = Config.Bind(CATEGORY_CAMERA, "Tap Length", 0.2f,
 				new ConfigDescription("How long left click can be held and still count as a tap. TapOnly only.",
 					new AcceptableValueRange<float>(0.05f, 1f), Order(74)));
 			tapPixels = Config.Bind(CATEGORY_CAMERA, "Tap Drag Allowance", 10f,
