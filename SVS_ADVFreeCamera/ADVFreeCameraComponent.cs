@@ -1583,7 +1583,7 @@ namespace SVS_ADVFreeCamera
 		public static string AimAt(string boneName)
 		{
 			ADVFreeCameraComponent? self = Instance;
-			if (self == null) return "CameraPlus is not running";
+			if (self == null) return "SVS_ADVFreeCamera is not running";
 			if (self._controller == null) return "Switch the free camera on first";
 			if (self._charaRoot == null) return "Set Focus Point to Character first";
 

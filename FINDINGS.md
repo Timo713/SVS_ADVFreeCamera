@@ -186,7 +186,8 @@ and `IsVisible` show up in a dump of the type but belong to nested classes, and
 do not compile against the scenario itself.
 
 Full write-up, including the corroborating `ADV.Commands.Base.Regulate` scenario
-command, is in D:\CoderdPov\FINDINGS.md §4.
+command, is in the companion notes for the SVS_3rdPov work,
+where the mechanism was first identified.
 
 ---
 
@@ -278,11 +279,11 @@ the camera during a pause. It does **not** give readable C# on its own;
 Il2CppDumper output has empty bodies too. Do it offline against a *copy* of
 `GameAssembly.dll`, never by swapping the BepInEx build.
 
-dnSpy has a command line build, `D:\Code\_tools\dnSpy\dnSpy.Console.exe`, which
-needs neither the GUI nor the MCP server:
+dnSpy ships a command line build, `dnSpy.Console.exe`, which needs neither the
+GUI nor the MCP server:
 
 ```bash
-D:/Code/_tools/dnSpy/dnSpy.Console.exe --no-color -t ILLGames.Unity.CameraController Assembly-CSharp.dll
+dnSpy.Console.exe --no-color -t ILLGames.Unity.CameraController Assembly-CSharp.dll
 ```
 
 `-t` takes `Namespace.Name` or a bare `Name`, and prints the whole type to

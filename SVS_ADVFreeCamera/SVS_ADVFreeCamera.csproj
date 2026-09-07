@@ -21,9 +21,19 @@
 	     that BepInEx generates next to the game. Referencing those directly
 	     guarantees we compile against exactly the API that exists at runtime.
 	     Private=false means "reference it, don't copy it into our output". -->
-	<PropertyGroup>
-		<InteropPath>D:\Games\SamabakeScrambleTest\BepInEx\SamabakeScramble\interop</InteropPath>
-	</PropertyGroup>
+	<!-- Set InteropPath to your own game folder. Copy Local.props.example to
+	     Local.props and edit it (Local.props is not tracked by git), or pass it
+	     on the command line:
+	       dotnet build -p:InteropPath="C:\Games\SVS\BepInEx\SamabakeScramble\interop" -->
+	<Import Project="$(MSBuildThisFileDirectory)..\Local.props"
+	        Condition="Exists('$(MSBuildThisFileDirectory)..\Local.props')" />
+
+	<Target Name="CheckInteropPath" BeforeTargets="BeforeBuild">
+		<Error Condition="'$(InteropPath)' == ''"
+		       Text="InteropPath is not set. Copy Local.props.example to Local.props and point it at your game's BepInEx\SamabakeScramble\interop folder." />
+		<Error Condition="!Exists('$(InteropPath)')"
+		       Text="No interop assemblies at &quot;$(InteropPath)&quot;. Run the game once with BepInEx installed so it can generate them, then check the path in Local.props." />
+	</Target>
 
 	<ItemGroup>
 		<Reference Include="$(InteropPath)\*.dll">
