@@ -30,8 +30,9 @@ while you move it.
 - [BepInEx.ConfigurationManager](https://github.com/BepInEx/BepInEx.ConfigurationManager)
   to change settings in game (optional; the `.cfg` file works too)
 
-> **Disable other camera plugins** while using this one. SVS_3rdPov and SVS_PovX
-> overwrite the camera every frame and will silently defeat it.
+Other camera plugins are fine alongside this one. SVS_3rdPov and SVS_PovX drive
+`Camera.main`, which is the background camera during a conversation, not the one
+this plugin takes over — tested with both enabled, with nothing misbehaving.
 
 ## Installing
 

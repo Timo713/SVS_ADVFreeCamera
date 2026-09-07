@@ -298,7 +298,12 @@ of any kind**. Rotation therefore inverts per axis by sign, while panning and
 the right-drag dolly share `_moveSpeed` and cannot be inverted separately.
 
 Other camera plugins (`SVS_3rdPov`, `SVS_PovX`) overwrite `Camera.main` every
-frame and will silently defeat this one. Rename or remove them while testing.
+frame. That defeated an **early** version of this one, which drove `Camera.main`
+as well - turning them off was what first made the camera move at all. It does
+not apply any more: conversations are driven through the ADV scene camera (§2),
+and testing with both plugins enabled found nothing wrong. Do not disable them
+out of habit. The SVS_3rdPov in the test install is a reworked build rather than
+the original, so the original may still behave differently.
 
 ---
 
