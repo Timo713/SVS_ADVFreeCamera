@@ -400,5 +400,7 @@ FodyWeavers.xsd
 
 # Per-machine settings: the path to your own game install, and local notes
 Local.props
+# Working notes, kept on this machine rather than in the repository
+CLAUDE.md
 # Anything named *.local.md stays on this machine
 *.local.md
