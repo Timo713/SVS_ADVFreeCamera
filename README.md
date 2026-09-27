@@ -10,9 +10,9 @@ while you move it.
 
 ## What it does
 
-- **Free camera during conversations.** Press <kbd>F</kbd> to take control,
-  press it again to hand the scene back. Same controls as character creation,
-  because it is the same camera component.
+- **Free camera during conversations.** It takes over by itself once a character
+  is in shot, and <kbd>F</kbd> hands the scene back or takes it again. Same
+  controls as character creation, because it is the same camera component.
 - **Left click still advances the dialogue.** A quick tap advances the line, a
   press and hold moves the camera. Three other modes are available if you would
   rather click only on the message frame, block click-advance entirely, or leave
@@ -34,13 +34,21 @@ Other camera plugins are fine alongside this one. SVS_3rdPov and SVS_PovX drive
 `Camera.main`, which is the background camera during a conversation, not the one
 this plugin takes over — tested with both enabled, with nothing misbehaving.
 
+SVS Screenshot Expansion has a talk camera of its own on the same camera as this
+one. When both are installed, its talk camera is switched off automatically so
+the two do not fight; its screenshots keep working as normal. Turning this
+plugin's Enabled setting off hands the camera back to it.
+
 ## Installing
 
 Drop `SVS_ADVFreeCamera.dll` into `<game>/BepInEx/plugins/`.
 
 ## Using it
 
-Start a conversation and press <kbd>F</kbd>.
+Start a conversation and the free camera takes over once a character is in
+shot. <kbd>F</kbd> switches it off and on. Set **Initial Camera** to
+`DefaultCamera` if you'd rather every conversation start on the game's own
+camera and only switch over when you press <kbd>F</kbd>.
 
 | Input | Does |
 |---|---|

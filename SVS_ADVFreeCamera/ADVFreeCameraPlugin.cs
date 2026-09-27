@@ -12,6 +12,8 @@ using LogLevel = BepInEx.Logging.LogLevel;
 namespace SVS_ADVFreeCamera
 {
 	[BepInProcess(PROCESS_NAME)]
+	//Soft: not needed, only loaded first when present so its camera can be switched off
+	[BepInDependency(ScreenshotExpansionCompat.GUID, BepInDependency.DependencyFlags.SoftDependency)]
 	[BepInPlugin(GUID, PLUGIN_NAME, VERSION)]
 	public class ADVFreeCameraPlugin : BasePlugin
 	{
@@ -24,7 +26,7 @@ namespace SVS_ADVFreeCamera
 
 		public const string PROCESS_NAME = "SamabakeScramble";
 		public const string GUID = "SVS_ADVFreeCamera";
-		public const string VERSION = "1.1.0";
+		public const string VERSION = "1.1.1";
 
 		#endregion
 
@@ -121,7 +123,7 @@ namespace SVS_ADVFreeCamera
 				new ConfigDescription("CameraType1 keeps the dialogue working, but panning does not follow the "
 				+ "view. CameraType2 pans properly and hides the dialogue until you switch back.",
 					null, Order(100)));
-			initialState = Config.Bind(CATEGORY_CAMERA, "Initial Camera", InitialCamera.DefaultCamera,
+			initialState = Config.Bind(CATEGORY_CAMERA, "Initial Camera", InitialCamera.CameraType1,
 				new ConfigDescription("Which camera a conversation starts on.", null, Order(90)));
 			clickAdvance = Config.Bind(CATEGORY_CAMERA, "Left Click Advance", ClickAdvance.TapOnly,
 				new ConfigDescription("How left click advances the dialogue while the free camera is on. Normal "
@@ -204,6 +206,9 @@ namespace SVS_ADVFreeCamera
 			//Create the component that watches for conversations. It lives on the
 			//BepInEx manager object, so it survives every scene change.
 			GetOrAddComponent();
+
+			//Other plugins that drive the conversation camera
+			ScreenshotExpansionCompat.Apply();
 
 
 			Logging.LogInfo($"{PLUGIN_NAME} {VERSION} loaded");

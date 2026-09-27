@@ -307,6 +307,31 @@ the original, so the original may still behave differently.
 
 ---
 
+### SVS Screenshot Expansion
+
+`com.korg.svs.ScreenshotExpansion` has its own talk camera on the same object
+this plugin drives - the Simulation camera named `Camera` - so the two fight.
+It does not use `CameraController`: it backs up the transform on the first drag
+and rebuilds it with `RotateAround` about a pivot every `LateUpdate`.
+
+Every part of that camera starts in one private method,
+`SVS_ScreenshotEx.ScreenshotBehaviour.UpdateDialogueCamera` - hotkeys, drag
+handling, and the backup and orbit state its `LateUpdate` later writes from. A
+prefix skipping it leaves that state unset, so the rest of its camera code has
+nothing to do, while its screenshot code, which runs earlier in `Update`, is
+untouched. `ScreenshotExpansionCompat` does this, found by name so there is no
+reference to their DLL.
+
+**Prefix-skip works here** even though §2 says it does not on this game: that
+rule is about the game's own IL2CPP methods. Another plugin is ordinary .NET, and
+Harmony skips its methods normally.
+
+A soft `BepInDependency` on their GUID makes BepInEx load theirs first when it is
+present, so their type exists by the time this plugin `Load()`s. Without it,
+load order decides whether the patch finds anything.
+
+---
+
 ## 6. Still open
 
 - **Pause** returns the camera to its default framing. Everything below is
