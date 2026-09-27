@@ -72,6 +72,8 @@ Choices are always clickable, in every mode.
 
 ## Settings
 
+<img width="250" alt="SVS_2026-09-27_03-15-29-982_2560x1440" src="https://github.com/user-attachments/assets/ce812a4b-495c-466d-8e6a-8ea57c6f53a7" />
+
 **General** — Enabled, Toggle Free Camera (<kbd>F</kbd>).
 
 **Camera** — Camera Type, Initial Camera, Left Click Advance, Tap Length, Tap
