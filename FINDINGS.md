@@ -76,37 +76,32 @@ Measured framing for a standard character: camera `(0, 1.42, 1.00)`, angles
 - `ADV.MainScenario` sits on the same object and inherits `TextScenario`, so
   `_currentLine`, `IsChoice` and `IsInputLock` are all readable and writable.
 
-### MainScenario re-applies the camera every frame
+### Panning that follows the view (SOLVED in 1.2.0)
 
-This is why panning does not follow the view: the orbit centre is reset each
-frame, so rotation and zoom survive — both are relative to the centre — while
-panning, which *moves* the centre, is silently undone.
+Read with `isil.ps1`: `CameraController.InputMouseProc` pans along
+`GetTransformDirection(v)`, which is `_transformCache.TransformDirection(v)` - the
+camera transform as it is at that moment (then turned into `_transBase`'s space
+if that is set; it is null here). The scenario puts the camera transform back to
+the scene's own angle every frame before the controller runs, so a pan moved
+along the angle the scene started at, not the one on screen. Rotation and zoom
+were never affected.
 
-Only clearing `MainScenario.enabled` stops it. Specifically ruled out:
+The fix (`PanFix.cs`, CONFIRMED 2026-10-26): a Harmony prefix on
+`InputMouseProc` turns our camera to `Quaternion.Euler(CameraRot)` first. The
+stick pan takes its axes from `CameraRot` for the same reason. One free camera
+type is left; the dialogue keeps running.
 
-- `ADVScene.IsCameraLock` and `CommandController.useCorrectCamera` were **already**
-  in the state we wanted, so setting them did nothing.
-- **Harmony prefixes returning false do not skip the original on this target.**
-  The prefix runs and logs, but the method executes anyway. Verified by
-  suppressing `MainScenario.Update` unconditionally and seeing the dialogue UI
-  completely unaffected, while unchecking the same component by hand breaks it
-  instantly. Do not reach for prefix-skip here.
+Tried before and dropped, one line each:
 
-Overwriting the orbit centre every frame instead was tried and does not work:
-the centre gets pinned, so the camera can only rotate about one fixed point.
-Worse, that failed approach silently became Camera Type 2 when Camera Type 3
-was removed - the working branch was left unreachable behind a type check that
-nothing satisfied any more. If panning is wrong, check `EngageFix` reaches the
-`_mainScenario.enabled = false` line at all.
-
-Camera Type 2 therefore disables the driver, which costs the dialogue UI until it
-is switched back. Toggling the driver replays the current line — voice, lip sync,
-subtitle and animation together — so `_currentLine` is saved and restored around
-it, and the driver is switched back on the next frame to clear the leftover
-subtitle. Restoring the UI needs the `ADVScene(Clone)` GameObject cycled off and
-on.
-
----
+- Setting `ADVScene.IsCameraLock` and `CommandController.useCorrectCamera`: both
+  already held the wanted value.
+- A prefix returning false on `MainScenario.Update`: it runs, but does not skip
+  a Unity message.
+- Overwriting the orbit centre every frame: pins the camera to one point.
+- **Switching `MainScenario` off** (the old Camera Type 2): pans correctly, but
+  hides the text until switched back and replays the line (voice, lip sync,
+  animation), which needed `_currentLine` saving, a one-frame re-enable and a
+  voice silencer. Removed with the type choice in 1.2.0.
 
 ### Blocking click-advance
 
@@ -207,9 +202,35 @@ nearest to `Stand`, with and without a view cone or a radius) failed on unusuall
 tall characters, whose head bone is further from any anchor simply by virtue of
 their height.
 
-Group framing - averaging the bones of everyone in frame - was tried and removed.
-It could not reliably tell a one-character scene from a two or three hander, and
-misjudging that broke centring outright.
+Group framing - averaging the bones of everyone in frame - was tried once and
+removed: counting every loaded character in shot could not tell a one-character
+scene from a two or three hander (map characters are loaded too, far away).
+
+**Back in 1.2.0, UNVERIFIED in game**, now counting the scene's own cast:
+`scenario.CommandController.Characters` (`Dictionary<int, ADV.CharaData>`), kept
+only if the head bone is active, within 10 m of the camera and inside its view,
+and **never the player** (by `Heroine` against `SV.GameChara.Player`, and by
+body against `SV.GameChara.PlayerAI.chaCtrl`), and **only if `Human.visibleAll`**.
+CONFIRMED 2026-10-26 from the log: a one-person talk listed two cast members
+in shot within 10 m (`chaM_03, chaM_04`), so it was treated as a group and
+AllCharacters kept the game's shot instead of centring on the bone. Which of
+the two filters drops the extra one is UNVERIFIED; "On stage:" now prints each
+head position and "left out:" with the reason.
+
+Neither mode follows anyone after the camera comes on: both read the bones at
+that moment. AllCharacters's point stays straight ahead of the game's camera
+(only its height changes), which is why it never looked centred on one person.
+With two or more, setting "Several Characters": **AllCharacters** keeps the game's
+shot (orbit point straight ahead) and only sets its height to the average of their
+focus bones; **MostFavoured** centres on the one the player likes most, by
+`SaveData.Extension.ActorExtension.GetFavorInfo(SV.GameChara.Player, actor)`,
+`longSensitivityCounts`, indexed by `SaveData.SensitivityParameter.Sensitivity`
+(LOVE 0, FRIEND 1, INDIFFERENT 2, DISLIKE 3; CONFIRMED from the enum): love
+minus dislike first, friend minus indifferent to break a tie. Whether these
+counters are the points the game shows is UNVERIFIED; the log prints all four.
+
+The centre is worked out once, when the camera comes on. It does not follow the
+character afterwards (the Aicomi port does); the developer found that fine.
 
 ### Bones
 
@@ -261,6 +282,15 @@ metres of the conversation camera *and* inside its viewport. Distance alone is
 not enough, since a character can be near the camera without being in the shot.
 Tall characters need a larger proximity, because the head bone sits further away.
 
+The start is on the **first frame** that test passes. A counter for "the camera
+has sat still" was still being computed after its sliders were removed, and never
+read; it is gone (v1.2.0). CONFIRMED fine in SVS at the time ("delay 0 fine").
+
+The Aicomi port found the same instant start centring on a bone caught
+mid-animation, and fixed it by letting the orbit centre follow the focus bone for
+3 seconds. **Not needed in SVS**: with Focus Point = Character and the camera
+starting by itself, the character is centred (CONFIRMED 2026-10-26).
+
 ---
 
 ## 5. Environment
@@ -278,6 +308,11 @@ Il2CppDumper emit the symbol script that makes Ghidra decompile
 the camera during a pause. It does **not** give readable C# on its own;
 Il2CppDumper output has empty bodies too. Do it offline against a *copy* of
 `GameAssembly.dll`, never by swapping the BepInEx build.
+
+Update 2026-10-06: the HF-patched install already holds that decrypted metadata
+(`BepInEx\SamabakeScramble\decrypted_global-metadata.dat`), and Cpp2IL turns it
+plus `GameAssembly.dll` into a per-method listing in seconds, read-only. That
+answers most "what does this method do" questions without Ghidra.
 
 dnSpy ships a command line build, `dnSpy.Console.exe`, which needs neither the
 GUI nor the MCP server:
@@ -332,42 +367,155 @@ load order decides whether the patch finds anything.
 
 ---
 
-## 6. Still open
+## 6. Features added in 1.2.0, and open ideas
 
-- **Pause** returns the camera to its default framing. Everything below is
-  measured, and none of it has produced a fix:
+### Pause and menus (SOLVED in 1.2.0, CONFIRMED 2026-10-28)
 
-  - `Time.timeScale` really is `0.00` while paused, so pause detection is not the
-    problem.
-  - It is our camera being moved. Its transform changes, and both the controller
-    and the camera stay enabled throughout.
-  - **Camera Type 2 is immune.** That is the mode which switches `MainScenario`
-    off, so the scenario is what triggers it.
-  - Writing the pose back does not hold it, in any form tried: the camera
-    transform, the controller state (`CameraPos`, `CameraRot`, `CameraDir`,
-    `CameraFov`), both together, from `LateUpdate`, and from a Harmony postfix on
-    `CameraController.LateUpdate` so it lands after the controller whichever way
-    Unity ordered the two. All of that was removed again rather than left in.
+`CameraController::LateUpdate` (isil.ps1) returns before input and before the
+virtual `CameraUpdate()` (which applies the pose) when a `SingletonInitializer` is
+not initialised, when `Manager.Scene.IsOverlap`, or when `Scene.IsNowLoadingFade`.
+The pause menu is an overlap scene, so the controller stopped applying our pose and
+the scenario's per-frame reset (section 2, panning) was all that showed.
+`PauseFix.cs`: a postfix on `LateUpdate` calls `CameraUpdate()` for our controller
+on those frames, and logs "Menu over the conversation" once.
 
-  `TextScenario.Update` is the only Unity message on the scenario side and
-  `CameraController.LateUpdate` the only one on the camera side, so on ordering
-  alone a postfix on the latter should have been the last word before rendering.
-  It was not, which says something writes the camera during the render phase or
-  from a UniRx subscription later than both. Finding it means reading real method
-  bodies - see the Ghidra route in section 5 - not another experiment.
+Tried before and failed, do not repeat: writing the pose back (transform,
+`CameraPos`/`CameraRot`/`CameraDir`/`CameraFov`, both) from `LateUpdate` or from
+that same postfix. Camera Type 2 (scenario driver off) was immune, which pointed
+at the scenario. `MainScenario.Update` only calls the base `Update` while a
+`SV.Config.ConfigWindow` static flag is set (not followed up).
 
-- **Panning with the dialogue intact.** Only Camera Type 2 pans correctly, and it
-  costs the UI. Overwriting the orbit centre every frame was tried and failed.
+### Several Characters = Speaker (1.2.0, CONFIRMED 2026-10-28)
 
-  Untried, and the most promising direction: drive `Main Camera` rather than the
-  ADV camera, the way character creation and H scenes do. Both of those pan
-  correctly with the same `CameraController`, so comparing their setup in
-  RuntimeUnityEditor against ours is the place to start - what the target
-  transform is, what the camera stack looks like, and what else is attached.
+Default since 2026-10-28; AverageHeight was renamed AllCharacters (never released,
+so no carry-over). At the start of a talk `CurrentChara` is usually not set yet:
+the camera then keeps the game's shot with nobody picked, checks every frame, and
+starts on the first cast member to speak outright if that is within 0.75 s of
+coming on, else glides there. Picking the newest-loaded character first caused a
+glide from someone who had not spoken (reported 2026-10-28).
+
+Centres on `TextScenario.CurrentChara` when it is one of the stage cast (by
+`ChaCtrl.Pointer`); the player and narration are not in the cast, so they leave
+the centre where it is. Checked four times a second; on a change the controller's
+`CameraPos` glides to the new `FocusPoint` (exponential, rate 9/s, lerping from
+the current `CameraPos` so a pan is not fought). Angle and zoom are untouched.
+The same `CurrentChara` is what the Aicomi port uses.
+
+**Who speaks first (CONFIRMED 2026-10-28).** `ADV.Commands.Chara.Create` calls
+`TextScenario.ChangeCurrentChara`, so before the first line `CurrentChara` is just
+whoever was created last (it was the tall character, centred before her turn).
+The current speaker is set by the `CharaChange` command: `Int32.Parse(args[0])`
+then `ChangeCurrentChara(no)` -> `CommandController.GetChara(no)` (isil/xref).
+So when the camera comes on with no text showing, `UpcomingSpeaker` scans
+`CommandPacks` from `CurrentLine` (300 at most) for the first `CharaChange`
+before a `Text`; that cast member is the start. Many Apartment `CommandSelect`
+commands call `ChangeCurrentChara` from code, which the scan cannot see: then it
+falls back to the game's shot and moves at the first line. After that a speaker
+change counts only while text is on screen.
+
+**Tall characters left out of the cast (CONFIRMED from the log 2026-10-28).** The
+in-shot test used the head 5% inside the frame; a very tall character's head is
+at or above the top, so a two-person talk counted one (single-character path,
+centred on her even under AllCharacters) or nobody. The cast now counts a
+character whose head or body middle (between root and head) is anywhere in the
+frame; "left out" prints the head's viewport position.
+
+### Follow Character (1.2.0, UNVERIFIED)
+
+On by default (briefly off, back on after testing 2026-10-28). Each frame the centre (`CameraPos` and the pivot) moves by how far
+the focus bone moved, so a pan offset is kept. Paused while the cursor is hidden
+for a drag, while the controller is moving the camera, and during a speaker
+glide; the bone is re-read when it resumes. The Aicomi port instead follows to
+the bone's position for a few seconds after the start, until the mouse is used.
+
+### From the Aicomi port, not yet tried here
+
+The Aicomi port (AC_ADVFreeCamera) turned these up. None is verified in SVS.
+
+- **Driving the controller by hand.** The port calls `InputMouseWheelZoomProc`,
+  `InputMouseProc`, `InputKeyProc`, then `CameraUpdate()` from its own
+  `LateUpdate`. SVS has all four on `ILLGames.Unity.CameraController` (CONFIRMED,
+  names only). Untested idea for Camera Type 1 panning: run them after the
+  scenario has had its turn and see whether a pan survives. Aicomi itself has no
+  panning problem - nothing re-applies the camera there - so this is an
+  experiment, not a known fix.
+- **The wheel and the text** - done here in 1.2.0, UNVERIFIED in game. Unmodded
+  SVS advances the text on the wheel and does not zoom (CONFIRMED 2026-10-26). So
+  "Game Uses Wheel During Text" (default on): while text or choices are up the
+  camera ignores the wheel (`_zoomSpeed` 0, no wheel turning), and because
+  blocking `ClickNext` also kills wheel-advance, a scroll down while the plugin
+  holds the block calls `AdvanceOneLine()` (`WheelAdvance`, from Update only).
+- Tried in the port and removed, do not repeat: making Camera Distance absolute
+  for the default camera by measuring to the focus bone. Bones lean with the pose,
+  so the view shifted a few centimetres even at the default.
 
 ---
 
-## 7. Working practice
+## 7. Controller and cursor (v1.2.0)
+
+### Controller
+
+Unity cannot read the right stick or the triggers in SVS: only the legacy input
+system ships, and its settings name axes for the left stick (`Horizontal` /
+`Vertical`, shared with WASD and the arrow keys) and the D-pad only. CONFIRMED in
+SVS_FreeRoam (its FINDINGS, section 15). So `Gamepad.cs` reads the pad
+from Windows through XInput, left stick included to keep the keyboard out.
+
+Mapping: left stick pans (`CameraPos` plus the camera right and up), right stick
+turns (`CameraRot`, same signs as the mouse so Invert X / Y cover both, pitch held
+short of straight up or down), right trigger in and left trigger out
+(`CameraDir.z`). All written straight to the controller in `LateUpdate`, as the
+wheel and middle-button remaps already do for turning. CONFIRMED working
+(2026-10-26). The stick pan has the same Camera Type 1 fault as the mouse pan:
+writing `CameraPos` from the plugin is undone the same way, so this is no way
+round the panning bug.
+
+The toggle button is a plain `KeyCode` read through Unity (`Toggle Button`,
+default `JoystickButton6` = Back / View / Select), so it can be rebound.
+UNVERIFIED in game.
+
+**SVS_FreeRoam uses the left stick in conversations too.** A push past 0.6 stands
+in for the D-pad and starts selecting on-screen buttons. `FreeRoamCompat` patches
+its `SVS_FreeRoam.GamepadUI.NavDirection(bool useStick)` and turns `useStick` off
+while the free camera and Gamepad Camera are on; the D-pad itself keeps working.
+Found by name, like the Screenshot Expansion one. CONFIRMED working (2026-10-26).
+
+**No `BepInDependency` for either (1.2.0).** KKManager listed both soft
+dependencies as requirements and would not let the player disable them
+(reported 2026-10-28). Both `Apply()`s now run from
+`IL2CPPChainloader.Instance.Finished` (BepInEx.Core `BaseChainloader`), when
+every plugin is loaded, whatever the order. UNVERIFIED in game. If that
+method is renamed the log says so and the overlap returns.
+
+### Cursor
+
+Hidden from the moment any mouse button is pressed (1.2.0; it used to wait for
+5 px of movement, which looked like a delay next to the crosshair), not while
+paused, not for a press that landed on a button, slider or
+scrollbar (top uGUI raycast hit has a `Selectable`), not while an IMGUI control is
+being dragged (`GUIUtility.hotControl`). Restored to how it was found. Hiding
+CONFIRMED (2026-10-26). The crosshair is drawn exactly while the camera is being moved
+(mouse or controller). After the controller, the cursor stays hidden until the
+mouse moves 3 px (asked for 2026-10-28). Since the cursor is pinned from the press, "was it a drag"
+(for Left Click Advance = TapOnly) adds up each frame's distance from the pin
+and calls it a drag at 5 px.
+
+Hiding means both the Windows cursor and `SV.SpriteCursor.imgCursor`, the image
+the game can draw as a pointer of its own. Which of the two a conversation shows
+was never settled; hiding both works.
+
+**Held in place** while hidden, as character creation does: the screen position
+at the press (`GetCursorPos`) is put back every frame with `SetCursorPos`, in
+`NativeCursor.cs` (native declarations kept out of the injected component), and
+once more on release. UNVERIFIED in game; the risk is that the camera stops
+turning if Unity reads mouse movement from the position. With the pointer held
+still, TapOnly can no longer measure a drag by distance, so a press that hid the
+cursor counts as a drag outright (`_pressDragged`).
+
+Not tried: the game's `SetCursorLock(true)` on `GameCursor` / `SV.SpriteCursor`.
+---
+
+## 8. Working practice
 
 Three rounds were lost to `str.replace` silently matching nothing while the
 change was reported as done. **Assert every edit and grep for the result before

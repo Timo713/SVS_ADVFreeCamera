@@ -8,6 +8,8 @@ conversation (talk/ADV) scenes lock you to scripted angles. This plugin hands
 those scenes the same camera you already know, and keeps the dialogue usable
 while you move it.
 
+![A conversation on the beach, framed with the free camera](images/conversation.jpg)
+
 ## What it does
 
 - **Free camera during conversations.** It takes over by itself once a character
@@ -21,6 +23,9 @@ while you move it.
   choice from head down to feet, tracking them as they move.
 - **Framing offsets** — distance, height, depth and tilt — which can apply to
   the game's own camera as well as ours.
+- **Controller support.** Left stick pans, right stick turns, triggers move in
+  and out.
+- The cursor hides while you drag the camera, and comes back where you pressed.
 - Invert X and Y, adjustable speeds, and a rebindable toggle key.
 
 ## Requirements
@@ -39,6 +44,10 @@ one. When both are installed, its talk camera is switched off automatically so
 the two do not fight; its screenshots keep working as normal. Turning this
 plugin's Enabled setting off hands the camera back to it.
 
+SVS_FreeRoam lets the left stick pick on-screen buttons during a conversation.
+While the free camera is using that stick, this plugin asks it to wait; the D-pad
+still picks buttons and choices.
+
 ## Installing
 
 Drop `SVS_ADVFreeCamera.dll` into `<game>/BepInEx/plugins/`.
@@ -56,7 +65,11 @@ camera and only switch over when you press <kbd>F</kbd>.
 | Left tap | Advance the dialogue |
 | Right drag | Move in and out |
 | Middle drag | Pan (or turn, if you prefer — it is configurable) |
-| Mouse wheel | Zoom (or turn) |
+| Mouse wheel | Advances the text while it is up, as in the game; otherwise zooms (or turns) |
+| Left stick | Pan |
+| Right stick | Turn the camera |
+| Right / left trigger | Move in / out |
+| Select (Back / View) | Free camera on and off |
 
 **Left Click Advance** decides how clicking and the dialogue share the left
 button:
@@ -76,12 +89,18 @@ Choices are always clickable, in every mode.
 
 **General** — Enabled, Toggle Free Camera (<kbd>F</kbd>).
 
-**Camera** — Camera Type, Initial Camera, Left Click Advance, Tap Length, Tap
-Drag Allowance, Silence Repeated Voice, Invert X, Invert Y, Rotate Speed, Zoom
-Speed, Move Speed, Mouse Wheel Function, Middle Button Function.
+**Camera** — Initial Camera, Left Click Advance, Tap Length, Tap
+Drag Allowance, Invert X, Invert Y, Rotate Speed, Zoom
+Speed, Move Speed, Mouse Wheel Function, Game Uses Wheel During Text, Middle
+Button Function.
+
+**Gamepad** — Gamepad Camera, Toggle Button, Turn Speed, Move Speed. Xbox-style controllers
+(XInput), which covers most pads under Steam Input.
 
 **Framing** — Focus Point (leave the shot alone, centre on the speaker, or
-resume where you left it), Character Focus Bone, Camera Distance, Height Offset,
+resume where you left it), Several Characters (with two or three on screen:
+whoever is talking, all of them, or the one you like most), Follow Character,
+Character Focus Bone, Camera Distance, Height Offset,
 Depth Offset, Tilt Offset, Offsets Affect Default Camera, Show Crosshair.
 
 **Debug** — Show Status Overlay, Show Camera Readout, Show Text Area, Overlay
@@ -91,17 +110,8 @@ Every setting carries its own description in ConfigurationManager.
 
 ## Known limitations
 
-- **Pausing resets the view.** Coming back from the pause screen puts the camera
-  where the scene had it. Camera Type 2 is not affected.
-- **Camera Type 1 panning does not follow the view.** It moves along the frame
-  the camera started in. The scenario re-applies the orbit centre every frame,
-  and only Camera Type 2 stops that.
-- **Camera Type 2 pans correctly but hides the dialogue** until you switch back,
-  because it switches the scenario driver off to do it. Use it to set up a shot,
-  not to read.
-
-Both are recorded in [FINDINGS.md](FINDINGS.md) §6 with everything measured so
-far.
+None known. [FINDINGS.md](FINDINGS.md) records how the game was worked out and
+what was tried.
 
 ## Building
 

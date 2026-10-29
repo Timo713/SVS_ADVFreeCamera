@@ -404,3 +404,5 @@ Local.props
 CLAUDE.md
 # Anything named *.local.md stays on this machine
 *.local.md
+AGENTS.md
+HANDOFF.md

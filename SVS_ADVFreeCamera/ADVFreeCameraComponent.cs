@@ -2,7 +2,10 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
 using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using ILLGames.Unity;
 
@@ -19,27 +22,8 @@ namespace SVS_ADVFreeCamera
 		/// <summary>Exactly as the game would be without this plugin.</summary>
 		DefaultCamera,
 
-		/// <summary>Free camera up straight away. Only Type1 is offered, because
-		/// the other modes interrupt the dialogue.</summary>
-		CameraType1,
-	}
-
-
-	/// <summary>
-	/// Which free camera to use. The difference between them is how each deals
-	/// with the scenario re-applying the camera every frame, which is what stops
-	/// panning from following the view.
-	/// </summary>
-	public enum CameraType
-	{
-		/// <summary>Safe. Dialogue keeps working; panning uses a frame fixed when
-		/// the camera came on.</summary>
-		CameraType1,
-
-		/// <summary>Correct panning, at the cost of the dialogue UI, because the
-		/// scenario driver is switched off.</summary>
-		CameraType2,
-
+		/// <summary>Free camera up straight away.</summary>
+		FreeCamera,
 	}
 
 
@@ -71,6 +55,21 @@ namespace SVS_ADVFreeCamera
 		RotateVertical,
 	}
 
+
+	/// <summary>
+	/// How Focus Point = Character frames two or three people on screen.
+	/// </summary>
+	public enum GroupFraming
+	{
+		/// <summary>Centred on whoever is talking, gliding to the next one when the speaker changes.</summary>
+		Speaker,
+
+		/// <summary>The game's shot of the whole group, raised or lowered to their average bone height.</summary>
+		AllCharacters,
+
+		/// <summary>Centred on the one the player likes most: love against dislike first, then friendship against indifference.</summary>
+		MostFavoured,
+	}
 
 	/// <summary>
 	/// What left click does while the free camera is on.
@@ -154,6 +153,7 @@ namespace SVS_ADVFreeCamera
 
 		//Looked up once and reused. Tells us whether a conversation is running.
 		private ADV.ADVManager? _advManager;
+		private float _nextManagerSearch;
 
 		//Live free-camera state, all null while the free camera is off
 		private CameraController? _controller;
@@ -163,23 +163,29 @@ namespace SVS_ADVFreeCamera
 		private Transform? _charaRoot;
 		private Transform? _focusBone;
 
-		//The scenario driver, switched off to stop it re-applying the camera
+		//The conversation the free camera is attached to
 		private ADV.ADVScene? _advScene;
-		private ADV.MainScenario? _mainScenario;
-		private bool _scenarioDisabled;
-		private int _reEnableScenarioOnFrame = -1;
 
-		//Voices are cut for a short window rather than once, because the replayed
-		//line does not start until a frame or two after the scenario is toggled
-		private int _silenceUntilFrame = -1;
+		//The controller is moving the camera this frame: the cursor hides and the
+		//crosshair shows for exactly as long as a stick or trigger is held
+		private bool _padMoving;
 
-		//Whether the panning fix is currently engaged, and the orbit centre we own
-		//while OverrideCentre is doing the panning
-		private bool _fixEngaged;
+		//A menu is open over the conversation and PauseFix is applying the camera
+		private bool _overlayHeld;
 
-		//The mode in force right now, which the toggle key can flip without
-		//rewriting the configured default
-		private CameraType _currentMode = CameraType.CameraType1;
+		//The two or three on stage when the camera came on, for Several Characters =
+		//Speaker; null for a one-person talk
+		private List<ADV.CharaData>? _stageCast;
+		private float _nextSpeakerCheck;
+		private float _activatedAt;
+
+		//Follow Character: where the focus bone was last frame
+		private bool _followHasBone;
+		private Vector3 _followLastBone;
+
+		//Moving the centre to a new speaker over a moment rather than in one jump
+		private bool _gliding;
+		private Vector3 _glideTarget;
 		private ADV.TextScenario? _clickBlocked;
 
 
@@ -197,18 +203,29 @@ namespace SVS_ADVFreeCamera
 		private static Vector3 _rememberedAngles;
 		private static float _rememberedDistance;
 
-		//The scenario line in progress, put back so toggling does not replay it
-		private int _savedLine = -1;
 
 		//Set when the player switches the camera off by hand, so the auto-start does
 		//not immediately bring it back. Cleared when the conversation ends.
 		private bool _userSwitchedOff;
 
-		//Waiting for the ADV camera to stop being repositioned before attaching,
-		//rather than a fixed delay, so it comes up as soon as it is safe
-		private Vector3 _settleLastPosition;
-		private int _settleFrames;
-		private int _sceneFirstSeenFrame = -1;
+		//The cursor is hidden while the camera is being dragged, and put back the
+		//way it was found
+		private bool _mouseWasHeld;
+		private bool _pressOnControl;
+		private Vector3 _dragStartPos;
+		private float _dragTravel;
+
+		//Hidden by the controller rather than a drag, and where the mouse was then
+		private bool _cursorHiddenByPad;
+		private Vector3 _padHidMouse;
+		private bool _cursorHidden;
+		private bool _cursorWasVisible;
+		private bool _spriteWasEnabled;
+		private bool _spriteCursorFailed;
+		private bool _pressDragged;
+		private bool _hasPin;
+		private int _pinX;
+		private int _pinY;
 
 		//Framing worked out in Activate and applied once the controller attaches.
 		//The base point is kept without offsets so live slider changes can be
@@ -276,6 +293,10 @@ namespace SVS_ADVFreeCamera
 		{
 			if (_advManager == null)
 			{
+				//At most once a second. Where there is no manager to find - character
+				//creation, the title - searching every frame was slow enough to lag
+				if (Time.unscaledTime < _nextManagerSearch) return false;
+				_nextManagerSearch = Time.unscaledTime + 1f;
 				_advManager = UnityEngine.Object.FindObjectOfType<ADV.ADVManager>();
 			}
 
@@ -285,7 +306,6 @@ namespace SVS_ADVFreeCamera
 
 
 		/*FREE CAMERA*/
-		private bool _autoStarting;
 
 		private void Activate()
 		{
@@ -303,16 +323,13 @@ namespace SVS_ADVFreeCamera
 				return;
 			}
 
-			//Starting a conversation with the free camera already up must never
-			//interrupt the dialogue, so that path is pinned to Type1
-			_currentMode = ADVFreeCameraPlugin.initialState.Value == InitialCamera.CameraType1 && IsActive == false && _autoStarting
-				? CameraType.CameraType1
-				: ADVFreeCameraPlugin.freeCameraType.Value;
 
 			//Remember the framing so we can put it back exactly on detach
 			Transform cameraTransform = camera.transform;
 			cameraTransform.GetPositionAndRotation(out _savedPosition, out _savedRotation);
 			_savedFov = camera.fieldOfView;
+			_activatedAt = Time.unscaledTime;
+			_followHasBone = false;
 			_camera = camera;
 
 			EnsurePivot();
@@ -327,6 +344,16 @@ namespace SVS_ADVFreeCamera
 				_headTarget = FindSpeakerHead(scene, camera);
 			}
 
+			//Two or three on stage: frame them as a group, or pick the favourite
+			float? groupHeight = null;
+			if (focus == FocusMode.Character)
+			{
+				List<ADV.CharaData> cast = StageCast(scene, camera);
+				_stageCast = cast.Count >= 2 ? cast : null;
+				if (cast.Count >= 2) groupHeight = FrameGroup(scene, cast);
+			}
+
+
 			if (focus == FocusMode.RememberLastPosition && _hasRemembered)
 			{
 				_baseOrbitPoint = _rememberedCentre;
@@ -335,7 +362,6 @@ namespace SVS_ADVFreeCamera
 				_orbitDistance = _rememberedDistance;
 
 				_advScene = scene;
-				EngageFix();
 
 				try
 				{
@@ -348,7 +374,7 @@ namespace SVS_ADVFreeCamera
 					return;
 				}
 
-				Logging.LogInfo($"Free camera ON, resumed at {_rememberedCentre}");
+				Logging.LogDebug($"Free camera ON, resumed at {_rememberedCentre}");
 				return;
 			}
 
@@ -358,7 +384,7 @@ namespace SVS_ADVFreeCamera
 				//Re-aiming from the old position instead tilts the view downward
 				//and looks nothing like how the game frames a conversation.
 				orbitPoint = FocusPoint(cameraTransform);
-				Logging.LogInfo($"Focus at {orbitPoint}, head bone {_headTarget.position}");
+				Logging.LogDebug($"Focus at {orbitPoint}, head bone {_headTarget.position}");
 			}
 			else
 			{
@@ -366,6 +392,10 @@ namespace SVS_ADVFreeCamera
 				//be applied inside FocusPoint, which only runs for Character - so
 				//height and depth did nothing in the other two modes.
 				orbitPoint = _savedPosition + (cameraTransform.forward * distance);
+
+				//A group: the same shot, only moved up or down to their average height
+				if (groupHeight != null) orbitPoint.y = groupHeight.Value;
+
 				_baseOrbitPoint = orbitPoint;
 				orbitPoint += OffsetVector(cameraTransform);
 			}
@@ -375,12 +405,6 @@ namespace SVS_ADVFreeCamera
 			_orbitDistance = distance;
 
 			_advScene = scene;
-
-			//Resolved in every mode, not just Type2, because the drag lock needs it
-			//while the dialogue is still running
-			_mainScenario = scene.GetComponent<ADV.MainScenario>();
-
-			EngageFix();
 
 			try
 			{
@@ -393,57 +417,22 @@ namespace SVS_ADVFreeCamera
 				return;
 			}
 
-			Logging.LogInfo($"Free camera ON. Saved pos={_savedPosition} rot={_savedRotation.eulerAngles} fov={_savedFov}");
+			Logging.LogDebug($"Free camera ON. Saved pos={_savedPosition} rot={_savedRotation.eulerAngles} fov={_savedFov}");
 		}
 
 		/// <summary>
-		/// Attach as soon as the ADV camera has stopped being moved by the scene.
-		/// A fixed delay was either too slow to feel instant or too quick and
-		/// captured a pose the scene had not finished setting.
+		/// Bring the free camera up by itself, on the first frame the conversation
+		/// is ready for it - see SceneReady. It used to wait for the camera to sit
+		/// still as well, but that was dropped once waiting for a character in shot
+		/// proved enough.
 		/// </summary>
 		private void WaitForSceneThenActivate()
 		{
 			ADV.ADVScene? pending = UnityEngine.Object.FindObjectOfType<ADV.ADVScene>();
-			if (pending == null)
-			{
-				_settleFrames = 0;
-				_sceneFirstSeenFrame = -1;
-				return;
-			}
+			if (pending == null || pending.ADVCamera == null) return;
+			if (SceneReady(pending) == false) return;
 
-			Camera camera = pending.ADVCamera;
-			if (camera == null)
-			{
-				_settleFrames = 0;
-				return;
-			}
-
-			//Which readiness signal to trust is a question for testing, so it is a
-			//setting rather than a guess baked in here
-			if (SceneReady(pending) == false)
-			{
-				_settleFrames = 0;
-				return;
-			}
-
-			if (_sceneFirstSeenFrame < 0) _sceneFirstSeenFrame = Time.frameCount;
-
-			Vector3 position = camera.transform.position;
-			_settleFrames = (position - _settleLastPosition).sqrMagnitude < 0.000001f ? _settleFrames + 1 : 0;
-			_settleLastPosition = position;
-
-			//Two conditions, because either alone was not enough. The camera can sit
-			//still for a moment early on while the scene is still being built, which
-			//produced a first activation with the wrong framing that then stuck for
-			//the rest of the conversation - the bad pose having been recorded as the
-			//one to restore. Waiting for a settled camera AND a minimum age makes
-			//the automatic start behave like pressing the key a moment later.
-			if (_sceneFirstSeenFrame >= 0)
-			{
-				_settleFrames = 0;
-				_sceneFirstSeenFrame = -1;
-				Activate();
-			}
+			Activate();
 		}
 
 		/// <summary>
@@ -502,6 +491,27 @@ namespace SVS_ADVFreeCamera
 		}
 
 		/// <summary>
+		/// For the stage cast: the head or the middle of the body in frame, edges
+		/// included. Testing the head alone, 5% in from the edges, left out a very
+		/// tall character whose head is at or above the top of the shot - so a group
+		/// was taken for one person, or nobody.
+		/// </summary>
+		private static bool BodyInShot(Camera camera, Vector3 feet, Vector3 head)
+		{
+			if (Vector3.Distance(head, camera.transform.position) > START_PROXIMITY) return false;
+
+			return InFrame(camera, head) || InFrame(camera, Vector3.Lerp(feet, head, 0.5f));
+		}
+
+		private static bool InFrame(Camera camera, Vector3 position)
+		{
+			Vector3 viewport = camera.WorldToViewportPoint(position);
+			return viewport.z > 0f
+				&& viewport.x >= 0f && viewport.x <= 1f
+				&& viewport.y >= 0f && viewport.y <= 1f;
+		}
+
+		/// <summary>
 		/// Turn the free camera off and put the conversation camera back exactly
 		/// where the game left it.
 		/// </summary>
@@ -512,6 +522,7 @@ namespace SVS_ADVFreeCamera
 			//ObservableDestroyTrigger when the GameObject dies. Destroying only the
 			//component leaves those alive but pointing at a dead object, which
 			//throws every frame forever and starves the animation system.
+			ShowCursorAgain();
 			RememberNow();
 
 			if (_controller != null)
@@ -524,6 +535,8 @@ namespace SVS_ADVFreeCamera
 			_headTarget = null;
 			_charaRoot = null;
 			_focusBone = null;
+			_stageCast = null;
+			_gliding = false;
 
 			if (_camera != null)
 			{
@@ -534,12 +547,9 @@ namespace SVS_ADVFreeCamera
 
 			ReleaseClickBlock();
 
-			_fixEngaged = false;
-			RestoreScenario();
 			_advScene = null;
-			_mainScenario = null;
 
-			Logging.LogInfo($"Free camera OFF ({reason})");
+			Logging.LogDebug($"Free camera OFF ({reason})");
 		}
 
 		/// <summary>
@@ -663,133 +673,6 @@ namespace SVS_ADVFreeCamera
 		private static Il2CppSystem.Func<bool> Predicate(Func<bool> predicate)
 		{
 			return DelegateSupport.ConvertDelegate<Il2CppSystem.Func<bool>>(predicate)!;
-		}
-
-
-
-		/*SCENARIO DRIVER*/
-		/// <summary>
-		/// Stop ADV.MainScenario re-applying the scenario camera every frame,
-		/// which is what prevents panning from working.
-		///
-		/// Harmony cannot do this: prefixes on its Update are reached, but
-		/// returning false does not skip the original on this IL2CPP target.
-		/// Clearing the enabled flag is the only thing that works.
-		///
-		/// Switching it straight back on next frame keeps the camera free while
-		/// clearing the leftover subtitle and its backdrop. The dialogue UI stays
-		/// unresponsive until the free camera is switched off.
-		/// </summary>
-		private void EngageFix()
-		{
-			if (_fixEngaged) return;
-
-			CameraType fix = _currentMode;
-			if (fix == CameraType.CameraType1) return;
-
-			_fixEngaged = true;
-
-			if (_mainScenario == null)
-			{
-				Logging.LogWarning("No MainScenario found, panning will be restricted");
-				return;
-			}
-
-			//Toggling the driver makes it run the current line again - voice, lip
-			//sync, subtitle and animation together. Putting the line number back
-			//after the toggle stops the replay at source rather than muting parts
-			//of it one at a time.
-			_savedLine = _mainScenario._currentLine;
-
-			_mainScenario.enabled = false;
-			_scenarioDisabled = true;
-			_reEnableScenarioOnFrame = Time.frameCount + 1;
-			RequestSilence();
-
-			Logging.LogWarning("Panning fix: scenario disabled - dialogue UI will not respond");
-		}
-
-		private void DisengageFix()
-		{
-			if (_fixEngaged == false) return;
-
-			_fixEngaged = false;
-			RestoreScenario();
-
-			//The scene cycle resets the camera, so put our framing back
-			if (_controller != null) ApplyFraming(_controller);
-		}
-
-		/// <summary>
-		/// Put the scenario back. Re-enabling the component is not enough to revive
-		/// the dialogue UI; the scene object has to be cycled to rebuild it.
-		/// </summary>
-		private void RestoreScenario()
-		{
-			_reEnableScenarioOnFrame = -1;
-
-			//Only put things back if Type2 actually took them apart
-			if (_scenarioDisabled == false || _mainScenario == null) return;
-
-			_scenarioDisabled = false;
-			Logging.LogInfo("Scenario restored");
-
-			GameObject sceneObject = _mainScenario.gameObject;
-			_mainScenario.enabled = true;
-			if (_savedLine >= 0) _mainScenario._currentLine = _savedLine;
-			_mainScenario = null;
-			_savedLine = -1;
-
-			if (sceneObject != null)
-			{
-				sceneObject.SetActive(false);
-				sceneObject.SetActive(true);
-			}
-
-			RequestSilence();
-		}
-
-		/// <summary>
-		/// Cut off any dialogue voice that is playing. Toggling the scenario makes
-		/// the current line start again, and hearing the same greeting repeatedly
-		/// is the most irritating part of this approach.
-		/// </summary>
-		/// <summary>
-		/// Cut voices for the next half second or so. The replayed line does not
-		/// begin on the same frame the scenario is toggled, so a single call
-		/// catches nothing - this is why restoring needed its own window too.
-		/// </summary>
-		private void RequestSilence()
-		{
-			_silenceUntilFrame = Time.frameCount + 40;
-			SilenceVoices();
-		}
-
-		private void SilenceVoices()
-		{
-			if (ADVFreeCameraPlugin.silenceRepeatedVoice.Value == false || _advManager == null) return;
-
-			try
-			{
-				Il2CppSystem.Collections.Generic.List<AudioSource> voices = _advManager._playingVoice;
-				if (voices == null) return;
-
-				int stopped = 0;
-				for (int index = 0; index < voices.Count; index++)
-				{
-					AudioSource source = voices[index];
-					if (source == null || source.isPlaying == false) continue;
-
-					source.Stop();
-					stopped++;
-				}
-
-				if (stopped > 0) Logging.LogInfo($"Stopped {stopped} repeated voice line(s)");
-			}
-			catch (Exception exception)
-			{
-				Logging.LogWarning($"Could not stop the voice line: {exception.Message}");
-			}
 		}
 
 
@@ -986,6 +869,460 @@ namespace SVS_ADVFreeCamera
 		/// is not a MonoBehaviour either, so FindObjectsOfType cannot see them -
 		/// the static registry is the only way to enumerate characters.
 		/// </summary>
+		/// <summary>
+		/// The people on stage and on screen, from the scene's own cast list
+		/// (CommandController.Characters). Group framing was tried once before by
+		/// counting every loaded character in shot, and miscounted - map characters
+		/// hundreds of metres away are loaded too. The cast list holds only the stage.
+		/// </summary>
+		private static List<ADV.CharaData> StageCast(ADV.ADVScene scene, Camera camera)
+		{
+			List<ADV.CharaData> cast = new List<ADV.CharaData>();
+
+			try
+			{
+				ADV.TextScenario? scenario = scene.Scenario;
+				ADV.CommandController? commands = scenario != null ? scenario.CommandController : null;
+				if (commands == null || commands.Characters == null) return cast;
+
+				//The player is in the cast list too, and counting them made a one-person
+				//talk look like a group
+				SaveData.Actor player = SV.GameChara.Player;
+				Character.Human? playerBody = SV.GameChara.PlayerAI != null ? SV.GameChara.PlayerAI.chaCtrl : null;
+				List<IntPtr> seen = new List<IntPtr>();
+				List<string> names = new List<string>();
+				List<string> skipped = new List<string>();
+
+				foreach (ADV.CharaData data in commands.Characters.Values)
+				{
+					if (data == null) continue;
+
+					Character.Human human = data.ChaCtrl;
+					if (human == null || human.face == null) continue;
+					if (seen.Contains(human.Pointer)) continue;
+					string name = human.transform.name;
+
+					if ((player != null && data.Heroine != null && data.Heroine.Pointer == player.Pointer)
+						|| (playerBody != null && human.Pointer == playerBody.Pointer))
+					{
+						skipped.Add($"{name} (player)");
+						continue;
+					}
+
+					//Loaded and standing in shot, but not drawn: a one-person talk had
+					//such a second cast member, and counting it made the talk a group
+					if (human.visibleAll == false)
+					{
+						skipped.Add($"{name} (hidden)");
+						continue;
+					}
+
+					GameObject head = human.face.objHeadBone;
+					if (head == null || head.activeInHierarchy == false)
+					{
+						skipped.Add($"{name} (no head)");
+						continue;
+					}
+
+					Vector3 position = head.transform.position;
+					if (BodyInShot(camera, human.transform.position, position) == false)
+					{
+						Vector3 onScreen = camera.WorldToViewportPoint(position);
+						skipped.Add($"{name} (out of shot, head at {onScreen.x:F2},{onScreen.y:F2},{onScreen.z:F1})");
+						continue;
+					}
+
+					seen.Add(human.Pointer);
+					names.Add($"{name} head {position}");
+					cast.Add(data);
+				}
+
+				Logging.LogDebug($"On stage: {(names.Count > 0 ? string.Join(", ", names) : "nobody")}"
+					+ (skipped.Count > 0 ? $"; left out: {string.Join(", ", skipped)}" : ""));
+			}
+			catch (Exception exception)
+			{
+				Logging.LogWarning($"Could not read the cast: {exception.Message}");
+			}
+
+			return cast;
+		}
+
+		/// <summary>
+		/// Frame two or three people. AllCharacters returns the height to put the
+		/// orbit point at and leaves nobody targeted, so the game's own shot is kept;
+		/// MostFavoured and Speaker target one of them and return null.
+		/// </summary>
+		//Only called from this plugin; without the attribute, registering the component
+		//warns that a .NET List cannot be handed to the game
+		[HideFromIl2Cpp]
+		private float? FrameGroup(ADV.ADVScene scene, List<ADV.CharaData> cast)
+		{
+			if (ADVFreeCameraPlugin.groupFraming.Value == GroupFraming.MostFavoured)
+			{
+				ADV.CharaData? favourite = MostFavoured(cast);
+				if (favourite != null)
+				{
+					TargetCast(favourite);
+					Logging.LogDebug($"{cast.Count} on stage, centred on the favourite, \"{_charaRoot!.name}\"");
+					return null;
+				}
+			}
+
+			if (ADVFreeCameraPlugin.groupFraming.Value == GroupFraming.Speaker)
+			{
+				//Nobody on stage talking yet - the first line has not started, or it is
+				//the player's or narration: the game's own shot, with nobody picked, until
+				//one of them speaks. Picking the newest character instead meant a glide
+				//from someone who had not said a word to whoever spoke first.
+				//Before the first line, CurrentChara is only whoever was created last.
+				//The lines ahead say who will actually speak first.
+				ADV.CharaData? speaker;
+				string how;
+				if (TextShowing() == false && UpcomingSpeaker(scene, cast, out ADV.CharaData? upcoming))
+				{
+					speaker = upcoming;
+					how = "read ahead";
+				}
+				else
+				{
+					speaker = TextShowing() ? CurrentSpeaker(scene, cast) : null;
+					how = "current line";
+				}
+
+				if (speaker != null)
+				{
+					TargetCast(speaker);
+				}
+				else
+				{
+					_headTarget = null;
+					_focusBone = null;
+					_charaRoot = null;
+				}
+
+				Logging.LogDebug($"{cast.Count} on stage, centred on "
+					+ (speaker != null ? $"the speaker, \"{_charaRoot!.name}\" ({how})" : "nobody until one of them speaks"));
+				return null;
+			}
+
+			float total = 0f;
+			foreach (ADV.CharaData data in cast)
+			{
+				Character.Human human = data.ChaCtrl;
+				Transform head = human.face.objHeadBone.transform;
+				Transform? bone = ResolveFocusBone(human, head);
+				total += (bone != null ? bone : head).position.y;
+			}
+
+			//Nobody targeted: the orbit point stays straight ahead, as in the game's shot
+			_headTarget = null;
+			_focusBone = null;
+			_charaRoot = null;
+
+			float height = total / cast.Count;
+			Logging.LogDebug($"{cast.Count} on stage, framed at their average {ADVFreeCameraPlugin.focusBone.Value} height {height:F2}");
+			return height;
+		}
+
+		/// <summary>Centre on one member of the cast.</summary>
+		private void TargetCast(ADV.CharaData data)
+		{
+			Character.Human human = data.ChaCtrl;
+			Transform head = human.face.objHeadBone.transform;
+			_charaRoot = human.transform;
+			_headTarget = head;
+			_focusBone = ResolveFocusBone(human, head);
+		}
+
+		/// <summary>
+		/// The cast member speaking the current line (TextScenario.CurrentChara), or
+		/// null when it is the player, narration, or someone not on stage.
+		/// </summary>
+		private static ADV.CharaData? CurrentSpeaker(ADV.ADVScene scene, List<ADV.CharaData> cast)
+		{
+			ADV.TextScenario? scenario = scene.Scenario;
+			ADV.CharaData? current = scenario != null ? scenario.CurrentChara : null;
+			if (current == null || current.ChaCtrl == null) return null;
+
+			IntPtr speaker = current.ChaCtrl.Pointer;
+			foreach (ADV.CharaData data in cast)
+			{
+				if (data.ChaCtrl != null && data.ChaCtrl.Pointer == speaker) return data;
+			}
+
+			return null;
+		}
+
+		/// <summary>
+		/// Who will speak the next line, read from the scenario's own commands: the
+		/// first CharaChange (which sets TextScenario.CurrentChara, by
+		/// CommandController.GetChara of its first argument - read with isil.ps1)
+		/// before the next Text. True when that settles it: speaker is then the cast
+		/// member, or null for someone not on stage such as the player. False when a
+		/// Text comes first, or nothing is found.
+		/// </summary>
+		private static bool UpcomingSpeaker(ADV.ADVScene scene, List<ADV.CharaData> cast, out ADV.CharaData? speaker)
+		{
+			speaker = null;
+
+			try
+			{
+				ADV.TextScenario? scenario = scene.Scenario;
+				ADV.CommandController? commands = scenario != null ? scenario.CommandController : null;
+				Il2CppSystem.Collections.Generic.List<ADV.ScenarioCommand>? packs = scenario != null ? scenario.CommandPacks : null;
+				if (scenario == null || commands == null || packs == null) return false;
+
+				int start = Math.Max(0, scenario.CurrentLine);
+				int end = Math.Min(packs.Count, start + 300);
+
+				for (int index = start; index < end; index++)
+				{
+					ADV.ScenarioCommand command = packs[index];
+					if (command == null) continue;
+					if (command.Command == ADV.Command.Text) return false;
+					if (command.Command != ADV.Command.CharaChange) continue;
+
+					Il2CppStringArray args = command._args;
+					if (args == null || args.Length == 0 || int.TryParse(args[0], out int number) == false) continue;
+
+					ADV.CharaData data = commands.GetChara(number);
+					if (data == null || data.ChaCtrl == null) return true;
+
+					foreach (ADV.CharaData member in cast)
+					{
+						if (member.ChaCtrl != null && member.ChaCtrl.Pointer == data.ChaCtrl.Pointer)
+						{
+							speaker = member;
+							return true;
+						}
+					}
+
+					return true;
+				}
+			}
+			catch (Exception exception)
+			{
+				Logging.LogWarning($"Could not read the lines ahead: {exception.Message}");
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		/// Several Characters = Speaker: a few times a second, see who is talking, and
+		/// when it is someone else on stage move the centre to them. Angle and zoom
+		/// are the player's and are left alone. Works live, so switching the setting
+		/// mid-scene takes effect at the next line.
+		/// </summary>
+		private void FollowSpeaker()
+		{
+			GlideToCentre();
+
+			if (IsActive == false || _controller == null || _camera == null) return;
+			if (_advScene == null || _stageCast == null) return;
+			if (ADVFreeCameraPlugin.focusMode.Value != FocusMode.Character) return;
+			if (ADVFreeCameraPlugin.groupFraming.Value != GroupFraming.Speaker) return;
+
+			//Every frame until the first speaker is found, so the start is not late
+			if (_charaRoot != null && Time.unscaledTime < _nextSpeakerCheck) return;
+			_nextSpeakerCheck = Time.unscaledTime + 0.25f;
+
+			try
+			{
+				//Only with a line on screen: between lines CurrentChara can name someone
+				//who has just been created or staged rather than who is talking
+				if (TextShowing() == false) return;
+
+				ADV.CharaData? speaker = CurrentSpeaker(_advScene, _stageCast);
+				if (speaker == null) return;
+				if (_charaRoot != null && speaker.ChaCtrl.transform.Pointer == _charaRoot.Pointer) return;
+
+				bool first = _charaRoot == null;
+				TargetCast(speaker);
+				_glideTarget = FocusPoint(_camera.transform);
+
+				//The first line arriving moments after the camera came on: start there
+				//outright, as if it had been known from the start. Later, glide.
+				if (first && Time.unscaledTime - _activatedAt < FIRST_SPEAKER_SNAP_SECONDS && CameraBeingMoved == false)
+				{
+					_gliding = false;
+					_controller.CameraPos = _glideTarget;
+					if (_pivot != null) _pivot.transform.position = _glideTarget;
+					Logging.LogDebug($"First speaker, centred on \"{_charaRoot!.name}\"");
+					return;
+				}
+
+				_gliding = true;
+				Logging.LogDebug($"Speaker changed, centring on \"{_charaRoot!.name}\"");
+			}
+			catch (Exception exception)
+			{
+				Logging.LogWarning($"Could not centre on the new speaker: {exception.Message}");
+			}
+		}
+
+		/// <summary>
+		/// Follow Character: move the centre with the focus bone, so a character who
+		/// walks up, sits down or shifts stays framed. By the bone's movement, not
+		/// its position, so where the player has panned to is kept. Paused while the
+		/// camera is being moved (mouse or controller) and during a glide, and picked
+		/// up again from there when they stop.
+		/// </summary>
+		private void FollowCharacter()
+		{
+			Transform? bone = _focusBone != null ? _focusBone : _headTarget;
+
+			if (IsActive == false || _controller == null || bone == null
+				|| ADVFreeCameraPlugin.followCharacter.Value == false)
+			{
+				_followHasBone = false;
+				return;
+			}
+
+			Vector3 now = bone.position;
+			bool held = CameraBeingMoved || _gliding;
+
+			if (held || _followHasBone == false)
+			{
+				_followLastBone = now;
+				_followHasBone = true;
+				return;
+			}
+
+			Vector3 delta = now - _followLastBone;
+			_followLastBone = now;
+			if (delta.sqrMagnitude < 0.00000001f) return;
+
+			_controller.CameraPos += delta;
+			if (_pivot != null) _pivot.transform.position += delta;
+		}
+
+		//How quickly the centre glides to a new speaker: most of the way in a third
+		//of a second
+		private const float GLIDE_RATE = 9f;
+
+		//A first speaker found this soon after the camera came on is started on
+		//directly instead of glided to
+		private const float FIRST_SPEAKER_SNAP_SECONDS = 0.75f;
+
+		private void GlideToCentre()
+		{
+			if (_gliding == false) return;
+			if (IsActive == false || _controller == null)
+			{
+				_gliding = false;
+				return;
+			}
+
+			if (_headTarget != null && _camera != null) _glideTarget = FocusPoint(_camera.transform);
+
+			//From wherever the centre is now, so a pan made meanwhile is not fought
+			Vector3 next = Vector3.Lerp(_controller.CameraPos, _glideTarget,
+				1f - Mathf.Exp(-GLIDE_RATE * Time.unscaledDeltaTime));
+			if ((next - _glideTarget).sqrMagnitude < 0.000025f)
+			{
+				next = _glideTarget;
+				_gliding = false;
+			}
+
+			_controller.CameraPos = next;
+			if (_pivot != null) _pivot.transform.position = next;
+		}
+
+		/// <summary>
+		/// The one the player likes most, by the game's four counters
+		/// (SensitivityParameter.Sensitivity: LOVE, FRIEND, INDIFFERENT, DISLIKE),
+		/// read with ActorExtension.GetFavorInfo(player, them). Love minus dislike
+		/// first; friendship minus indifference breaks a tie.
+		/// </summary>
+		private static ADV.CharaData? MostFavoured(List<ADV.CharaData> cast)
+		{
+			try
+			{
+				SaveData.Actor player = SV.GameChara.Player;
+				if (player == null) return null;
+
+				ADV.CharaData? best = null;
+				int bestLove = int.MinValue;
+				int bestFriend = int.MinValue;
+				int count = (int)SaveData.SensitivityParameter.Sensitivity.MAX;
+
+				foreach (ADV.CharaData data in cast)
+				{
+					SaveData.Actor actor = data.Heroine;
+					if (actor == null || actor.Pointer == player.Pointer) continue;
+
+					SaveData.SensitivityParameter.FavorabiliryInfo info = SaveData.Extension.ActorExtension.GetFavorInfo(player, actor);
+					if (info == null || info.longSensitivityCounts == null || info.longSensitivityCounts.Length < count) continue;
+
+					int[] counts = info.longSensitivityCounts;
+					int loveCount = counts[(int)SaveData.SensitivityParameter.Sensitivity.LOVE];
+					int friendCount = counts[(int)SaveData.SensitivityParameter.Sensitivity.FRIEND];
+					int indifferent = counts[(int)SaveData.SensitivityParameter.Sensitivity.INDIFFERENT];
+					int dislike = counts[(int)SaveData.SensitivityParameter.Sensitivity.DISLIKE];
+
+					//The negative counters weigh against their positive opposites
+					int love = loveCount - dislike;
+					int friend = friendCount - indifferent;
+					Logging.LogDebug($"Favour towards \"{data.ChaCtrl.transform.name}\": love {loveCount}, friend {friendCount}, "
+						+ $"indifferent {indifferent}, dislike {dislike}");
+
+					if (love > bestLove || (love == bestLove && friend > bestFriend))
+					{
+						best = data;
+						bestLove = love;
+						bestFriend = friend;
+					}
+				}
+
+				return best;
+			}
+			catch (Exception exception)
+			{
+				Logging.LogWarning($"Could not read favour: {exception.Message}");
+				return null;
+			}
+		}
+
+		/// <summary>
+		/// For PauseFix: while a menu is open over the conversation the controller
+		/// stops applying the camera (CameraController.LateUpdate returns early on
+		/// Manager.Scene.IsOverlap or IsNowLoadingFade), so the scenario's own reset
+		/// is all that is left and the view jumps back to the scene's framing.
+		/// Apply it ourselves on those frames.
+		/// </summary>
+		internal static void HoldThroughOverlay(CameraController controller)
+		{
+			ADVFreeCameraComponent? self = Instance;
+			if (self == null || self._controller == null || self.IsActive == false) return;
+			if (controller.Pointer != self._controller.Pointer) return;
+
+			bool skipped = Manager.Scene.IsOverlap || Manager.Scene.IsNowLoadingFade;
+			if (skipped != self._overlayHeld)
+			{
+				self._overlayHeld = skipped;
+				Logging.LogDebug(skipped
+					? "Menu over the conversation: holding the free camera in place"
+					: "Menu closed");
+			}
+
+			if (skipped) controller.CameraUpdate();
+		}
+
+		/// <summary>
+		/// For PanFix: point our camera along the view on screen just before the
+		/// controller reads its mouse, so a pan follows that view.
+		/// </summary>
+		internal static void AlignForPan(CameraController controller)
+		{
+			ADVFreeCameraComponent? self = Instance;
+			if (self == null || self._controller == null || self._camera == null) return;
+			if (controller.Pointer != self._controller.Pointer) return;
+
+			self._camera.transform.rotation = Quaternion.Euler(controller.CameraRot);
+		}
+
 		private Transform? FindSpeakerHead(ADV.ADVScene scene, Camera camera)
 		{
 			try
@@ -1035,7 +1372,7 @@ namespace SVS_ADVFreeCamera
 				_charaRoot = best!.transform;
 				_focusBone = ResolveFocusBone(best, bestHead);
 
-				Logging.LogInfo($"Centred on \"{_charaRoot.name}\", {humans.Count} loaded");
+				Logging.LogDebug($"Centred on \"{_charaRoot.name}\", {humans.Count} loaded");
 
 				if (_focusBone == null)
 				{
@@ -1043,7 +1380,7 @@ namespace SVS_ADVFreeCamera
 				}
 				else
 				{
-					Logging.LogInfo($"{ADVFreeCameraPlugin.focusBone.Value} bone \"{_focusBone.name}\" at {_focusBone.position}");
+					Logging.LogDebug($"{ADVFreeCameraPlugin.focusBone.Value} bone \"{_focusBone.name}\" at {_focusBone.position}");
 				}
 
 				return bestHead;
@@ -1067,49 +1404,23 @@ namespace SVS_ADVFreeCamera
 				return;
 			}
 
-			//Switch the scenario back on the frame after it was switched off. That
-			//keeps the camera free while clearing the leftover subtitle.
-			if (_reEnableScenarioOnFrame >= 0 && Time.frameCount >= _reEnableScenarioOnFrame)
-			{
-				_reEnableScenarioOnFrame = -1;
-
-				if (_mainScenario != null)
-				{
-					_mainScenario.enabled = true;
-					if (_savedLine >= 0) _mainScenario._currentLine = _savedLine;
-				}
-
-				//The scenario gets one frame to run before it is switched off
-				//again, and moves the camera in it. Putting the framing back here
-				//removes the flicker that caused.
-				if (_controller != null) ApplyFraming(_controller);
-			}
-
-			//The replayed line starts a frame or two after a toggle, so silencing
-			//runs for a short window rather than once
-			if (Time.frameCount <= _silenceUntilFrame) SilenceVoices();
-
 			//Leaving the conversation must always tear the free camera down,
 			//otherwise the controller keeps driving a camera the game reuses
 			_inConversation = IsInConversation();
 
 			if (_inConversation == false)
 			{
-				_settleFrames = 0;
-				_sceneFirstSeenFrame = -1;
 				_userSwitchedOff = false;
 				if (IsActive) Deactivate("conversation ended");
 				return;
 			}
 
-			bool autoStart = ADVFreeCameraPlugin.initialState.Value == InitialCamera.CameraType1;
+			bool autoStart = ADVFreeCameraPlugin.initialState.Value == InitialCamera.FreeCamera;
 
 			//Bring the camera up by itself when the conversation starts
 			if (autoStart && IsActive == false && _userSwitchedOff == false)
 			{
-				_autoStarting = true;
 				WaitForSceneThenActivate();
-				_autoStarting = false;
 			}
 
 			//Also applied here, not only in LateUpdate: the scenario handles the
@@ -1120,8 +1431,9 @@ namespace SVS_ADVFreeCamera
 			//Only here, never in LateUpdate: GetMouseButtonUp is true in both, so
 			//a tap would otherwise be counted twice and skip a line
 			TrackTapAdvance();
+			WheelAdvance();
 
-			if (Input.GetKeyDown(ADVFreeCameraPlugin.toggleKey.Value))
+			if (Input.GetKeyDown(ADVFreeCameraPlugin.toggleKey.Value) || GamepadTogglePressed())
 			{
 				if (IsActive)
 				{
@@ -1272,9 +1584,277 @@ namespace SVS_ADVFreeCamera
 			ApplyClickBlock();
 			RemapWheel();
 			RemapMiddleButton();
+			FollowSpeaker();
+			FollowCharacter();
+			GamepadCamera();
 			OffsetDefaultCamera();
+			HideCursorWhileDragging();
 		}
 
+
+		//Controller speeds at a setting of 1: degrees a second, and metres a second
+		private const float GAMEPAD_TURN_SPEED = 120f;
+		private const float GAMEPAD_PAN_SPEED = 0.6f;
+		private const float GAMEPAD_DOLLY_SPEED = 1.2f;
+		private const float GAMEPAD_PITCH_LIMIT = 89f;
+		private const float GAMEPAD_MIN_DISTANCE = 0.05f;
+
+		//How far the pointer has to travel with a button held before it counts as
+		//dragging the camera, in pixels
+		private const float DRAG_HIDE_PIXELS = 5f;
+
+		//How far the mouse must move to bring back a cursor the controller hid
+		private const float PAD_SHOW_PIXELS = 3f;
+
+		/// <summary>
+		/// The camera is being moved right now: a drag, or a stick or trigger held.
+		/// Not the same as the cursor being hidden, which outlasts the controller.
+		/// </summary>
+		private bool CameraBeingMoved => (_cursorHidden && _cursorHiddenByPad == false) || _padMoving;
+
+		/// <summary>
+		/// Whether the controller is steering the free camera. Read by
+		/// FreeRoamCompat, which keeps SVS_FreeRoam off the left stick meanwhile.
+		/// </summary>
+		internal static bool GamepadCameraInUse
+		{
+			get
+			{
+				return Instance != null
+					&& Instance.IsActive
+					&& ADVFreeCameraPlugin.enabled.Value
+					&& ADVFreeCameraPlugin.gamepadCamera.Value;
+			}
+		}
+
+		/// <summary>
+		/// Move the free camera with a controller: left stick pans, right stick
+		/// turns, triggers move in and out. Written straight to the controller, the
+		/// way the wheel and middle button remaps already turn it.
+		/// </summary>
+		private void GamepadCamera()
+		{
+			_padMoving = false;
+			if (IsActive == false || _controller == null || _camera == null) return;
+			if (ADVFreeCameraPlugin.gamepadCamera.Value == false) return;
+
+			//Unscaled, so the camera keeps its speed if the game slows time down
+			float step = Time.unscaledDeltaTime;
+
+			if (Gamepad.RightStick != Vector2.zero || Gamepad.LeftStick != Vector2.zero
+				|| Gamepad.LeftTrigger > 0f || Gamepad.RightTrigger > 0f)
+			{
+				_padMoving = true;
+			}
+
+			Vector2 turn = Gamepad.RightStick;
+			if (turn != Vector2.zero)
+			{
+				float rate = GAMEPAD_TURN_SPEED * ADVFreeCameraPlugin.gamepadTurnSpeed.Value * step;
+				Vector3 angles = _controller.CameraRot;
+
+				//The same directions as dragging with the mouse, Invert X and Y included
+				angles.y += turn.x * rate * SignX();
+
+				//Stop short of straight up or down, where the view flips over. Left
+				//alone if the mouse has already taken it past that.
+				float pitch = Mathf.DeltaAngle(0f, angles.x);
+				float turned = pitch - (turn.y * rate * SignY());
+				if (Mathf.Abs(pitch) <= GAMEPAD_PITCH_LIMIT)
+				{
+					turned = Mathf.Clamp(turned, -GAMEPAD_PITCH_LIMIT, GAMEPAD_PITCH_LIMIT);
+				}
+
+				angles.x = turned;
+				_controller.CameraRot = angles;
+			}
+
+			Vector2 pan = Gamepad.LeftStick;
+			if (pan != Vector2.zero)
+			{
+				//Faster from further away, so a pan covers the same share of the screen
+				//Along the view on screen: in Camera Type 1 the scenario keeps putting the
+				//camera transform back to the scene's own angle, so that is not it
+				Quaternion facing = Quaternion.Euler(_controller.CameraRot);
+				float distance = Mathf.Max(1f, -_controller.CameraDir.z);
+				float rate = GAMEPAD_PAN_SPEED * ADVFreeCameraPlugin.gamepadMoveSpeed.Value * distance * step;
+
+				Vector3 centre = _controller.CameraPos + ((((facing * Vector3.right) * pan.x) + ((facing * Vector3.up) * pan.y)) * rate);
+				_controller.CameraPos = centre;
+				if (_pivot != null) _pivot.transform.position = centre;
+			}
+
+			float push = Gamepad.RightTrigger - Gamepad.LeftTrigger;
+			if (push != 0f)
+			{
+				//Squared, keeping the sign: a light pull creeps, a full pull is unchanged
+				push *= Mathf.Abs(push);
+
+				Vector3 direction = _controller.CameraDir;
+				float distance = -direction.z - (push * GAMEPAD_DOLLY_SPEED * ADVFreeCameraPlugin.gamepadMoveSpeed.Value * step);
+				direction.z = -Mathf.Max(GAMEPAD_MIN_DISTANCE, distance);
+				_controller.CameraDir = direction;
+			}
+		}
+
+		/// <summary>
+		/// Hide the cursor while the camera is being dragged. Only once the pointer
+		/// has actually moved with a button held, so a plain click never makes it
+		/// blink; never for a drag that began on a button, slider or scrollbar; and
+		/// never while the game is paused, where a drag belongs to a menu.
+		/// </summary>
+		private void HideCursorWhileDragging()
+		{
+			bool held = Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetMouseButton(2);
+
+			if (IsActive == false || held == false || Time.timeScale <= 0f)
+			{
+				_mouseWasHeld = false;
+
+				//The controller moving the camera hides it as a drag does, and it stays
+				//hidden after: someone playing on the controller has no use for it. It
+				//comes back when the mouse moves. Nothing to hold in place.
+				bool live = IsActive && Time.timeScale > 0f;
+				if (live && _padMoving && _cursorHidden == false)
+				{
+					_cursorHidden = true;
+					_cursorHiddenByPad = true;
+					_hasPin = false;
+					_cursorWasVisible = Cursor.visible;
+					_spriteWasEnabled = SpriteCursorEnabled();
+				}
+
+				if (_padMoving) _padHidMouse = Input.mousePosition;
+
+				if (live && _cursorHiddenByPad
+					&& Vector3.Distance(Input.mousePosition, _padHidMouse) < PAD_SHOW_PIXELS)
+				{
+					Cursor.visible = false;
+					SetSpriteCursor(false);
+					return;
+				}
+
+				ShowCursorAgain();
+				return;
+			}
+
+			if (_mouseWasHeld == false)
+			{
+				//Left hidden by the controller: start this press from a visible cursor, so
+				//a click on a button shows it and a drag hides and holds it as usual
+				if (_cursorHiddenByPad) ShowCursorAgain();
+
+				_mouseWasHeld = true;
+				_dragStartPos = Input.mousePosition;
+				_dragTravel = 0f;
+				_pressOnControl = PointerOverControl();
+				_pressDragged = false;
+				_hasPin = NativeCursor.TryGet(out _pinX, out _pinY);
+			}
+
+			if (_cursorHidden == false)
+			{
+				if (_pressOnControl) return;
+
+				//A slider or window in an on-screen tool, such as the settings window
+				if (GUIUtility.hotControl != 0) return;
+
+				//Hidden on the press itself, the moment the crosshair appears
+				_cursorHidden = true;
+				_cursorWasVisible = Cursor.visible;
+				_spriteWasEnabled = SpriteCursorEnabled();
+			}
+
+			//Held in place below, so the pointer only ever strays one frame's movement
+			//from where the press began: add those up to tell a drag from a click
+			_dragTravel += Vector3.Distance(Input.mousePosition, _dragStartPos);
+			if (_dragTravel >= DRAG_HIDE_PIXELS) _pressDragged = true;
+
+			//Every frame while hidden, in case the game switches it back on itself.
+			//Held where the press began, as character creation does, so it comes back
+			//there and a long drag never runs into the edge of the screen.
+			Cursor.visible = false;
+			SetSpriteCursor(false);
+			if (_hasPin) NativeCursor.Set(_pinX, _pinY);
+		}
+
+		/// <summary>
+		/// Put the cursor back the way it was before the drag.
+		/// </summary>
+		private void ShowCursorAgain()
+		{
+			if (_cursorHidden == false) return;
+
+			_cursorHidden = false;
+			_cursorHiddenByPad = false;
+			if (_hasPin) NativeCursor.Set(_pinX, _pinY);
+			Cursor.visible = _cursorWasVisible;
+			if (_spriteWasEnabled) SetSpriteCursor(true);
+		}
+
+		/// <summary>
+		/// Whether the pointer is on a button, slider or scrollbar. A drag that
+		/// starts on one belongs to it - the dialogue history scrollbar, say.
+		/// </summary>
+		private static bool PointerOverControl()
+		{
+			try
+			{
+				EventSystem system = EventSystem.current;
+				if (system == null) return false;
+
+				PointerEventData pointer = new PointerEventData(system);
+				pointer.position = new Vector2(Input.mousePosition.x, Input.mousePosition.y);
+
+				Il2CppSystem.Collections.Generic.List<RaycastResult> hits = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
+				system.RaycastAll(pointer, hits);
+				if (hits.Count == 0) return false;
+
+				//Only the one on top: anything beneath it is not what the press landed on
+				GameObject top = hits[0].gameObject;
+				return top != null && top.GetComponentInParent<Selectable>() != null;
+			}
+			catch (Exception)
+			{
+				return false;
+			}
+		}
+
+		/// <summary>
+		/// The game can draw a pointer of its own as an image, SV.SpriteCursor, as
+		/// well as the Windows one. Hiding only the Windows cursor would leave that
+		/// one on screen.
+		/// </summary>
+		private bool SpriteCursorEnabled()
+		{
+			if (_spriteCursorFailed) return false;
+
+			try
+			{
+				Image? image = SV.SpriteCursor.imgCursor;
+				return image != null && image.enabled;
+			}
+			catch (Exception)
+			{
+				_spriteCursorFailed = true;
+				return false;
+			}
+		}
+
+		private void SetSpriteCursor(bool show)
+		{
+			if (_spriteCursorFailed) return;
+
+			try
+			{
+				Image? image = SV.SpriteCursor.imgCursor;
+				if (image != null) image.enabled = show;
+			}
+			catch (Exception)
+			{
+				_spriteCursorFailed = true;
+			}
+		}
 
 		/// <summary>
 		/// Decide whether left click may advance the dialogue this frame, and hold
@@ -1370,6 +1950,14 @@ namespace SVS_ADVFreeCamera
 			if (Input.GetMouseButtonUp(0) == false || _tapTracking == false) return;
 			_tapTracking = false;
 
+			//Decided while the press was held, by the movement added up frame by frame.
+			//The cursor is held still meanwhile, so the distance it moved cannot tell.
+			if (_pressDragged)
+			{
+				_lastTap = "dragged";
+				return;
+			}
+
 			float held = Time.unscaledTime - _tapDownTime;
 			float moved = Vector3.Distance(Input.mousePosition, _tapDownPos);
 
@@ -1436,6 +2024,46 @@ namespace SVS_ADVFreeCamera
 
 			if (restore) scenario.Regulate.AddRegulate(ADV.Regulate.Controls.ClickNext);
 			return true;
+		}
+
+		/// <summary>
+		/// Text or choices on screen.
+		/// </summary>
+		private bool TextShowing()
+		{
+			ADV.TextScenario? scenario = Scenario();
+			if (scenario == null) return false;
+			if (scenario.IsChoice) return true;
+
+			Rect frame;
+			return MessageWindowRect(scenario, out frame);
+		}
+
+		/// <summary>
+		/// Blocking click-advance blocks the wheel's advance too, though Left Click
+		/// Advance is only meant to change clicking. So while the block is held, a
+		/// scroll down advances by hand. Called from Update only, so one scroll is
+		/// never counted twice.
+		/// </summary>
+		private void WheelAdvance()
+		{
+			if (IsActive == false || _clickBlocked == null) return;
+			if (ADVFreeCameraPlugin.gameUsesWheel.Value == false) return;
+			if (Input.GetAxis("Mouse ScrollWheel") >= 0f) return;
+
+			AdvanceOneLine();
+		}
+
+		/// <summary>
+		/// The controller button that toggles the free camera, read through Unity like
+		/// any key, so it can be rebound.
+		/// </summary>
+		private static bool GamepadTogglePressed()
+		{
+			if (ADVFreeCameraPlugin.gamepadCamera.Value == false) return false;
+
+			KeyCode button = ADVFreeCameraPlugin.gamepadToggleKey.Value;
+			return button != KeyCode.None && Input.GetKeyDown(button);
 		}
 
 		/// <summary>
@@ -1520,6 +2148,14 @@ namespace SVS_ADVFreeCamera
 		private void RemapWheel()
 		{
 			if (_controller == null) return;
+
+			//While text is up the wheel is the game's, as it is without the plugin:
+			//scrolling down advances the line. No zoom and no turning meanwhile.
+			if (ADVFreeCameraPlugin.gameUsesWheel.Value && TextShowing())
+			{
+				_controller._zoomSpeed = 0f;
+				return;
+			}
 
 			WheelFunction wheel = ADVFreeCameraPlugin.wheelFunction.Value;
 
@@ -1650,7 +2286,8 @@ namespace SVS_ADVFreeCamera
 		{
 			//Only shown while the camera is actually being moved, the way character
 			//creation shows its target marker
-			bool moving = Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetMouseButton(2);
+			//Exactly while the camera is being moved, mouse or controller
+			bool moving = CameraBeingMoved;
 			bool live = _inConversation && Time.timeScale > 0f;
 			if (IsActive && live && moving && ADVFreeCameraPlugin.showCrosshair.Value) DrawCrosshair();
 
