@@ -451,6 +451,20 @@ The Aicomi port (AC_ADVFreeCamera) turned these up. None is verified in SVS.
 
 ---
 
+### Background blur and black bars (1.3.0, CONFIRMED 2026-10-29)
+
+Both belong to `SV.HighPolyBackGroundFrame`, found under `Manager.Game`'s
+transform; its `animFrame` children are `Panel` (the blur, a `TranslucentImage`),
+`UpFrame` and `DownFrame` (the bars). They stay active; the animator shows and
+hides them. SVS_CheatTools ("Show background frame/blur") and SVS_3DRooms just
+SetActive them (decompiled 2026-10-29). The same frame is opened for
+conversations (`ADVManager._OpenADVAsync`, `BackGroundFrame` command, `PCHTask`)
+and blur-only for menus (`OpenBlurOnly`: save/load, correlation diagram, entry,
+SimulationScene), so `BackgroundFrame.cs` hides them only during a conversation,
+from `LateUpdate` (after the animator), and puts them back after.
+SVS_3rdPov's old Hide Blur also raised the contrast; how it hid the blur was not
+looked into.
+
 ## 7. Controller and cursor (v1.2.0)
 
 ### Controller

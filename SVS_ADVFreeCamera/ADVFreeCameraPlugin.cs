@@ -24,7 +24,7 @@ namespace SVS_ADVFreeCamera
 
 		public const string PROCESS_NAME = "SamabakeScramble";
 		public const string GUID = "SVS_ADVFreeCamera";
-		public const string VERSION = "1.2.0";
+		public const string VERSION = "1.3.0";
 
 		#endregion
 
@@ -99,6 +99,8 @@ namespace SVS_ADVFreeCamera
 		public static ConfigEntry<float> angleOffset = null!;
 		public static ConfigEntry<bool> offsetsAffectDefault = null!;
 		public static ConfigEntry<bool> showCrosshair = null!;
+		public static ConfigEntry<bool> hideBlur = null!;
+		public static ConfigEntry<bool> hideBars = null!;
 
 		//Debug
 		public static ConfigEntry<bool> showOverlay = null!;
@@ -211,6 +213,11 @@ namespace SVS_ADVFreeCamera
 					null, Order(66)));
 			showCrosshair = Config.Bind(CATEGORY_FRAMING, "Show Crosshair", false,
 				new ConfigDescription("Mark the point the camera orbits while you move it.", null, Order(60)));
+			hideBlur = Config.Bind(CATEGORY_FRAMING, "Hide Background Blur", false,
+				new ConfigDescription("Show the background sharp in conversations instead of blurred.", null, Order(55)));
+			hideBars = Config.Bind(CATEGORY_FRAMING, "Hide Black Bars", false,
+				new ConfigDescription("Remove the black bars at the top and bottom of the screen in conversations.",
+					null, Order(50)));
 
 
 			//Debug

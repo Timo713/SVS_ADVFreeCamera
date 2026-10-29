@@ -1580,6 +1580,8 @@ namespace SVS_ADVFreeCamera
 		/// </summary>
 		private void LateUpdate()
 		{
+			//After the frame's animator has run, so hiding wins for this frame
+			BackgroundFrame.Apply(ADVFreeCameraPlugin.enabled.Value && _inConversation);
 			ApplyLiveConfig();
 			ApplyClickBlock();
 			RemapWheel();
