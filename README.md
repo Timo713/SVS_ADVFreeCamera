@@ -25,8 +25,8 @@ while you move it.
   the game's own camera as well as ours.
 - **Controller support.** Left stick pans, right stick turns, triggers move in
   and out.
-- **Hide the background blur and the black bars** of conversations, each on its
-  own setting.
+- **Switch off the background blur and the black bars** of conversations, each
+  on its own setting.
 - The cursor hides while you drag the camera, and comes back where you pressed.
 - Invert X and Y, adjustable speeds, and a rebindable toggle key.
 
@@ -103,8 +103,8 @@ Button Function.
 resume where you left it), Several Characters (with two or three on screen:
 whoever is talking, all of them, or the one you like most), Follow Character,
 Character Focus Bone, Camera Distance, Height Offset,
-Depth Offset, Tilt Offset, Offsets Affect Default Camera, Show Crosshair, Hide
-Background Blur, Hide Black Bars.
+Depth Offset, Tilt Offset, Offsets Affect Default Camera, Show Crosshair, Show
+Background Blur, Show Background Frame.
 
 **Debug** — Show Status Overlay, Show Camera Readout, Show Text Area, Overlay
 Message Seconds, Enable Logging, Log Levels.

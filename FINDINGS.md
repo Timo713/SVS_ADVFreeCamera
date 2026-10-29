@@ -461,7 +461,8 @@ SetActive them (decompiled 2026-10-29). The same frame is opened for
 conversations (`ADVManager._OpenADVAsync`, `BackGroundFrame` command, `PCHTask`)
 and blur-only for menus (`OpenBlurOnly`: save/load, correlation diagram, entry,
 SimulationScene), so `BackgroundFrame.cs` hides them only during a conversation,
-from `LateUpdate` (after the animator), and puts them back after.
+from `LateUpdate` (after the animator), and puts them back after. Settings named
+as in CheatTools: Show Background Blur, Show Background Frame (on = as the game).
 SVS_3rdPov's old Hide Blur also raised the contrast; how it hid the blur was not
 looked into.
 

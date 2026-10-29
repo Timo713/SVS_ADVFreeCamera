@@ -30,8 +30,8 @@ namespace SVS_ADVFreeCamera
 		/// <summary>Each frame, after the animator: hide what the settings ask for while in a conversation.</summary>
 		public static void Apply(bool inConversation)
 		{
-			bool hideBlur = inConversation && ADVFreeCameraPlugin.hideBlur.Value;
-			bool hideBars = inConversation && ADVFreeCameraPlugin.hideBars.Value;
+			bool hideBlur = inConversation && ADVFreeCameraPlugin.showBlur.Value == false;
+			bool hideBars = inConversation && ADVFreeCameraPlugin.showFrame.Value == false;
 
 			//Nothing to hide and nothing to put back
 			if (hideBlur == false && hideBars == false && _blurHidden == false && _barsHidden == false) return;

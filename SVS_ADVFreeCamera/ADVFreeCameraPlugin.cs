@@ -99,8 +99,8 @@ namespace SVS_ADVFreeCamera
 		public static ConfigEntry<float> angleOffset = null!;
 		public static ConfigEntry<bool> offsetsAffectDefault = null!;
 		public static ConfigEntry<bool> showCrosshair = null!;
-		public static ConfigEntry<bool> hideBlur = null!;
-		public static ConfigEntry<bool> hideBars = null!;
+		public static ConfigEntry<bool> showBlur = null!;
+		public static ConfigEntry<bool> showFrame = null!;
 
 		//Debug
 		public static ConfigEntry<bool> showOverlay = null!;
@@ -213,10 +213,11 @@ namespace SVS_ADVFreeCamera
 					null, Order(66)));
 			showCrosshair = Config.Bind(CATEGORY_FRAMING, "Show Crosshair", false,
 				new ConfigDescription("Mark the point the camera orbits while you move it.", null, Order(60)));
-			hideBlur = Config.Bind(CATEGORY_FRAMING, "Hide Background Blur", false,
-				new ConfigDescription("Show the background sharp in conversations instead of blurred.", null, Order(55)));
-			hideBars = Config.Bind(CATEGORY_FRAMING, "Hide Black Bars", false,
-				new ConfigDescription("Remove the black bars at the top and bottom of the screen in conversations.",
+			showBlur = Config.Bind(CATEGORY_FRAMING, "Show Background Blur", true,
+				new ConfigDescription("Blur the background in conversations, as the game does. Off: the "
+				+ "background stays sharp.", null, Order(55)));
+			showFrame = Config.Bind(CATEGORY_FRAMING, "Show Background Frame", true,
+				new ConfigDescription("The black bars at the top and bottom of the screen in conversations.",
 					null, Order(50)));
 
 
